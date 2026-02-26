@@ -69,6 +69,10 @@ Configure your Infoflow bot webhook URL to:
 
 Restart the gateway after config changes.
 
+## Requirements
+
+- OpenClaw **≥ 2026.2.22**
+
 ## License
 
 MIT
