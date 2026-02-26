@@ -5,7 +5,7 @@ Baidu Infoflow (如流) channel plugin for OpenClaw.
 ## Install (npm)
 
 ```bash
-openclaw plugins install @chbo297/openclaw-infoflow
+openclaw plugins install @chbo297/infoflow
 ```
 
 ## Install (local checkout)
