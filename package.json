@@ -1,0 +1,41 @@
+{
+  "name": "@chbo297/openclaw-infoflow",
+  "version": "2026.2.23",
+  "description": "OpenClaw Infoflow (如流) channel plugin for Baidu enterprise messaging",
+  "type": "module",
+  "main": "index.ts",
+  "license": "MIT",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "infoflow",
+    "baidu",
+    "chatbot",
+    "ai-agent",
+    "enterprise-messaging"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chbo297/openclaw-infoflow"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "infoflow",
+      "label": "Infoflow",
+      "selectionLabel": "Infoflow (如流)",
+      "docsPath": "/channels/infoflow",
+      "blurb": "Baidu Infoflow messaging platform.",
+      "order": 40
+    },
+    "install": {
+      "npmSpec": "@chbo297/openclaw-infoflow",
+      "defaultChoice": "npm"
+    }
+  }
+}

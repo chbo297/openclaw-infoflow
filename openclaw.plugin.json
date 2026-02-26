@@ -1,0 +1,9 @@
+{
+  "id": "infoflow",
+  "channels": ["infoflow"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
