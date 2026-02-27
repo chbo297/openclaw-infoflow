@@ -294,14 +294,22 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
         abortSignal: ctx.abortSignal,
         statusSink: (patch) => ctx.setStatus({ accountId: account.accountId, ...patch }),
       });
-      return () => {
+
+      // Keep the channel alive until explicitly stopped.
+      // Without this, the promise resolves immediately and the gateway
+      // framework treats it as "channel exited", triggering auto-restart.
+      try {
+        await new Promise<void>((resolve) => {
+          ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      } finally {
         unregister?.();
         ctx.setStatus({
           accountId: account.accountId,
           running: false,
           lastStopAt: Date.now(),
         });
-      };
+      }
     },
   },
 };
