@@ -6,7 +6,7 @@ import {
   loadRawBody,
   type WebhookTarget,
 } from "./infoflow-req-parse.js";
-import { getInfoflowWebhookLog } from "./logging.js";
+import { getInfoflowWebhookLog, formatInfoflowError, logVerbose } from "./logging.js";
 import { getInfoflowRuntime } from "./runtime.js";
 
 // ---------------------------------------------------------------------------
@@ -88,16 +88,11 @@ export async function handleInfoflowWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  const core = getInfoflowRuntime();
-  const verbose = core.logging.shouldLogVerbose();
-
   const url = new URL(req.url ?? "/", "http://localhost");
   const requestPath = normalizeWebhookPath(url.pathname);
 
-  if (verbose) {
-    // Log the full request URL
-    getInfoflowWebhookLog().debug?.(`[infoflow] request: url=${url}`);
-  }
+  // Log the full request URL
+  logVerbose(`[infoflow] request: url=${url}`);
 
   // Check if path matches Infoflow webhook pattern
   if (!isInfoflowPath(requestPath)) {
@@ -130,18 +125,15 @@ export async function handleInfoflowWebhookRequest(
   try {
     result = await parseAndDispatchInfoflowRequest(req, bodyResult.raw, targets);
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    getInfoflowWebhookLog().error(`[infoflow] webhook handler error: ${errMsg}`);
+    getInfoflowWebhookLog().error(`[infoflow] webhook handler error: ${formatInfoflowError(err)}`);
     res.statusCode = 500;
     res.end("internal error");
     return true;
   }
 
-  if (verbose) {
-    getInfoflowWebhookLog().debug?.(
-      `[infoflow] dispatch result: handled=${result.handled}, status=${result.handled ? result.statusCode : "N/A"}`,
-    );
-  }
+  logVerbose(
+    `[infoflow] dispatch result: handled=${result.handled}, status=${result.handled ? result.statusCode : "N/A"}`,
+  );
 
   if (result.handled) {
     const looksLikeJson = result.body.startsWith("{");

@@ -7,7 +7,7 @@ import { createDedupeCache } from "openclaw/plugin-sdk";
 // ---------------------------------------------------------------------------
 import { handlePrivateChatMessage, handleGroupChatMessage } from "./bot.js";
 import type { ResolvedInfoflowAccount } from "./channel.js";
-import { getInfoflowParseLog } from "./logging.js";
+import { getInfoflowParseLog, formatInfoflowError, logVerbose } from "./logging.js";
 
 const DEDUP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const DEDUP_MAX_SIZE = 1000;
@@ -138,9 +138,7 @@ function parseXmlMessage(xmlString: string): Record<string, string> | null {
 // Types
 // ---------------------------------------------------------------------------
 
-type InfoflowCoreRuntime = {
-  logging: { shouldLogVerbose(): boolean };
-};
+type InfoflowCoreRuntime = Record<string, unknown>;
 
 export type WebhookTarget = {
   account: ResolvedInfoflowAccount;
@@ -216,14 +214,9 @@ export async function parseAndDispatchInfoflowRequest(
   rawBody: string,
   targets: WebhookTarget[],
 ): Promise<ParseResult> {
-  const verbose = targets[0]?.core?.logging?.shouldLogVerbose?.() ?? false;
   const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
 
-  if (verbose) {
-    getInfoflowParseLog().debug?.(
-      `[infoflow] parseAndDispatch: contentType=${contentType}, bodyLen=${rawBody.length}`,
-    );
-  }
+  logVerbose(`[infoflow] parseAndDispatch: contentType=${contentType}, bodyLen=${rawBody.length}`);
 
   // --- form-urlencoded: echostr verification + private chat ---
   if (contentType.startsWith("application/x-www-form-urlencoded")) {
@@ -248,14 +241,16 @@ export async function parseAndDispatchInfoflowRequest(
           return { handled: true, statusCode: 200, body: echostr };
         }
       }
-      getInfoflowParseLog().error(`[infoflow] echostr signature mismatch`);
+      getInfoflowParseLog().error(
+        `[infoflow] echostr signature mismatch (tried ${targets.length} account(s))`,
+      );
       return { handled: true, statusCode: 403, body: "Invalid signature" };
     }
 
     // private chat message (messageJson field in form)
     const messageJsonStr = form.get("messageJson") ?? "";
     if (messageJsonStr) {
-      return handlePrivateMessage(messageJsonStr, targets, verbose);
+      return handlePrivateMessage(messageJsonStr, targets);
     }
 
     getInfoflowParseLog().error(`[infoflow] form-urlencoded but missing echostr or messageJson`);
@@ -264,7 +259,7 @@ export async function parseAndDispatchInfoflowRequest(
 
   // --- text/plain: group chat ---
   if (contentType.startsWith("text/plain")) {
-    return handleGroupMessage(rawBody, targets, verbose);
+    return handleGroupMessage(rawBody, targets);
   }
 
   // --- unsupported Content-Type ---
@@ -280,7 +275,6 @@ type DecryptDispatchParams = {
   encryptedContent: string;
   targets: WebhookTarget[];
   chatType: "direct" | "group";
-  verbose: boolean;
   fallbackParser?: (content: string) => Record<string, unknown> | null;
   /** Async handler to process the decrypted message. Errors are caught internally. */
   dispatchFn: (target: WebhookTarget, msgData: Record<string, unknown>) => Promise<void>;
@@ -292,7 +286,7 @@ type DecryptDispatchParams = {
  * Dispatches asynchronously (fire-and-forget) with centralized error logging.
  */
 function tryDecryptAndDispatch(params: DecryptDispatchParams): ParseResult {
-  const { encryptedContent, targets, chatType, verbose, fallbackParser, dispatchFn } = params;
+  const { encryptedContent, targets, chatType, fallbackParser, dispatchFn } = params;
 
   if (targets.length === 0) {
     getInfoflowParseLog().error(`[infoflow] ${chatType}: no target configured`);
@@ -327,9 +321,7 @@ function tryDecryptAndDispatch(params: DecryptDispatchParams): ParseResult {
 
     if (msgData && Object.keys(msgData).length > 0) {
       if (isDuplicateMessage(msgData)) {
-        if (verbose) {
-          getInfoflowParseLog().debug?.(`[infoflow] ${chatType}: duplicate message, skipping`);
-        }
+        logVerbose(`[infoflow] ${chatType}: duplicate message, skipping`);
         return { handled: true, statusCode: 200, body: "success" };
       }
 
@@ -338,18 +330,18 @@ function tryDecryptAndDispatch(params: DecryptDispatchParams): ParseResult {
       // Fire-and-forget with centralized error handling
       void dispatchFn(target, msgData).catch((err) => {
         getInfoflowParseLog().error(
-          `[infoflow] ${chatType} handler error: ${err instanceof Error ? err.message : String(err)}`,
+          `[infoflow] ${chatType} handler error: ${formatInfoflowError(err)}`,
         );
       });
 
-      if (verbose) {
-        getInfoflowParseLog().debug?.(`[infoflow] ${chatType}: message dispatched successfully`);
-      }
+      logVerbose(`[infoflow] ${chatType}: message dispatched successfully`);
       return { handled: true, statusCode: 200, body: "success" };
     }
   }
 
-  getInfoflowParseLog().error(`[infoflow] ${chatType}: decryption failed for all accounts`);
+  getInfoflowParseLog().error(
+    `[infoflow] ${chatType}: decryption failed for all ${targets.length} account(s)`,
+  );
   return { handled: true, statusCode: 500, body: "decryption failed for all accounts" };
 }
 
@@ -362,11 +354,7 @@ function tryDecryptAndDispatch(params: DecryptDispatchParams): ParseResult {
  * Decrypts the Encrypt field with encodingAESKey (AES-ECB),
  * parses the decrypted content, then dispatches to bot.ts.
  */
-function handlePrivateMessage(
-  messageJsonStr: string,
-  targets: WebhookTarget[],
-  verbose: boolean,
-): ParseResult {
+function handlePrivateMessage(messageJsonStr: string, targets: WebhookTarget[]): ParseResult {
   let messageJson: Record<string, unknown>;
   try {
     messageJson = JSON.parse(messageJsonStr) as Record<string, unknown>;
@@ -385,7 +373,6 @@ function handlePrivateMessage(
     encryptedContent: encrypt,
     targets,
     chatType: "direct",
-    verbose,
     fallbackParser: parseXmlMessage,
     dispatchFn: (target, msgData) =>
       handlePrivateChatMessage({
@@ -406,16 +393,11 @@ function handlePrivateMessage(
  * The rawBody itself is an AES-encrypted ciphertext (Base64URLSafe encoded).
  * Decrypts and dispatches to bot.ts.
  */
-function handleGroupMessage(
-  rawBody: string,
-  targets: WebhookTarget[],
-  verbose: boolean,
-): ParseResult {
+function handleGroupMessage(rawBody: string, targets: WebhookTarget[]): ParseResult {
   return tryDecryptAndDispatch({
     encryptedContent: rawBody,
     targets,
     chatType: "group",
-    verbose,
     dispatchFn: (target, msgData) =>
       handleGroupChatMessage({
         cfg: target.config,

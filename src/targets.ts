@@ -3,8 +3,7 @@
  * Handles user and group ID formats for message targeting.
  */
 
-import { getInfoflowSendLog } from "./logging.js";
-import { getInfoflowRuntime } from "./runtime.js";
+import { logVerbose } from "./logging.js";
 
 // ---------------------------------------------------------------------------
 // Target Format Constants
@@ -33,23 +32,11 @@ const USER_PREFIX = "user:";
  *   "123456" -> "group:123456" (pure digits treated as group)
  */
 export function normalizeInfoflowTarget(raw: string): string | undefined {
-  // Get verbose state once at start
-  let verbose = false;
-  try {
-    verbose = getInfoflowRuntime().logging.shouldLogVerbose();
-  } catch {
-    // runtime not available, keep verbose = false
-  }
-
-  if (verbose) {
-    getInfoflowSendLog().debug?.(`[infoflow:normalizeTarget] input: "${raw}"`);
-  }
+  logVerbose(`[infoflow:normalizeTarget] input: "${raw}"`);
 
   const trimmed = raw.trim();
   if (!trimmed) {
-    if (verbose) {
-      getInfoflowSendLog().debug?.(`[infoflow:normalizeTarget] empty input, returning undefined`);
-    }
+    logVerbose(`[infoflow:normalizeTarget] empty input, returning undefined`);
     return undefined;
   }
 
@@ -63,27 +50,19 @@ export function normalizeInfoflowTarget(raw: string): string | undefined {
 
   // Keep group: prefix as-is
   if (target.toLowerCase().startsWith(GROUP_PREFIX)) {
-    if (verbose) {
-      getInfoflowSendLog().debug?.(`[infoflow:normalizeTarget] output: "${target}" (group)`);
-    }
+    logVerbose(`[infoflow:normalizeTarget] output: "${target}" (group)`);
     return target;
   }
 
   // Pure digits -> treat as group ID
   if (/^\d+$/.test(target)) {
     const result = `${GROUP_PREFIX}${target}`;
-    if (verbose) {
-      getInfoflowSendLog().debug?.(
-        `[infoflow:normalizeTarget] output: "${result}" (digits -> group)`,
-      );
-    }
+    logVerbose(`[infoflow:normalizeTarget] output: "${result}" (digits -> group)`);
     return result;
   }
 
   // Otherwise it's a username
-  if (verbose) {
-    getInfoflowSendLog().debug?.(`[infoflow:normalizeTarget] output: "${target}" (username)`);
-  }
+  logVerbose(`[infoflow:normalizeTarget] output: "${target}" (username)`);
   return target;
 }
 

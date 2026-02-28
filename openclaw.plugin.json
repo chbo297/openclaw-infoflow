@@ -4,6 +4,90 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "apiHost": { "type": "string" },
+      "enabled": { "type": "boolean" },
+      "name": { "type": "string" },
+      "checkToken": { "type": "string" },
+      "encodingAESKey": { "type": "string" },
+      "appKey": { "type": "string" },
+      "appSecret": { "type": "string" },
+      "robotName": { "type": "string" },
+      "dmPolicy": { "type": "string", "enum": ["open", "pairing", "allowlist"] },
+      "allowFrom": { "type": "array", "items": { "type": "string" } },
+      "groupPolicy": { "type": "string", "enum": ["open", "allowlist", "disabled"] },
+      "groupAllowFrom": { "type": "array", "items": { "type": "string" } },
+      "requireMention": { "type": "boolean" },
+      "replyMode": {
+        "type": "string",
+        "enum": ["ignore", "record", "mention-only", "mention-and-watch", "proactive"],
+        "default": "mention-and-watch"
+      },
+      "followUp": { "type": "boolean", "default": true },
+      "followUpWindow": { "type": "number", "default": 300 },
+      "watchMentions": { "type": "array", "items": { "type": "string" } },
+      "groups": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "replyMode": {
+              "type": "string",
+              "enum": ["ignore", "record", "mention-only", "mention-and-watch", "proactive"]
+            },
+            "watchMentions": { "type": "array", "items": { "type": "string" } },
+            "followUp": { "type": "boolean" },
+            "followUpWindow": { "type": "number" },
+            "systemPrompt": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "accounts": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "name": { "type": "string" },
+            "checkToken": { "type": "string" },
+            "encodingAESKey": { "type": "string" },
+            "appKey": { "type": "string" },
+            "appSecret": { "type": "string" },
+            "robotName": { "type": "string" },
+            "dmPolicy": { "type": "string", "enum": ["open", "pairing", "allowlist"] },
+            "allowFrom": { "type": "array", "items": { "type": "string" } },
+            "groupPolicy": { "type": "string", "enum": ["open", "allowlist", "disabled"] },
+            "groupAllowFrom": { "type": "array", "items": { "type": "string" } },
+            "requireMention": { "type": "boolean" },
+            "replyMode": {
+              "type": "string",
+              "enum": ["ignore", "record", "mention-only", "mention-and-watch", "proactive"]
+            },
+            "followUp": { "type": "boolean" },
+            "followUpWindow": { "type": "number" },
+            "watchMentions": { "type": "array", "items": { "type": "string" } },
+            "groups": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "replyMode": {
+                    "type": "string",
+                    "enum": ["ignore", "record", "mention-only", "mention-and-watch", "proactive"]
+                  },
+                  "watchMentions": { "type": "array", "items": { "type": "string" } },
+                  "followUp": { "type": "boolean" },
+                  "followUpWindow": { "type": "number" },
+                  "systemPrompt": { "type": "string" }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      },
+      "defaultAccount": { "type": "string" }
+    }
   }
 }

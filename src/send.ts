@@ -7,8 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveInfoflowAccount } from "./accounts.js";
 import { recordSentMessageId } from "./infoflow-req-parse.js";
-import { getInfoflowSendLog } from "./logging.js";
-import { getInfoflowRuntime } from "./runtime.js";
+import { getInfoflowSendLog, formatInfoflowError, logVerbose } from "./logging.js";
 import type {
   InfoflowGroupMessageBodyItem,
   InfoflowMessageContentItem,
@@ -163,7 +162,7 @@ export async function getAppAccessToken(params: {
 
     return { ok: true, token };
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
+    const errMsg = formatInfoflowError(err);
     return { ok: false, error: errMsg };
   } finally {
     clearTimeout(timeout);
@@ -275,10 +274,15 @@ export async function sendInfoflowPrivateMessage(params: {
       LOGID: randomUUID(),
     };
 
+    const bodyStr = JSON.stringify(payload);
+
+    // Log request body when verbose logging is enabled
+    logVerbose(`[infoflow:sendPrivate] POST body: ${bodyStr}`);
+
     const res = await fetch(`${ensureHttps(apiHost)}${INFOFLOW_PRIVATE_SEND_PATH}`, {
       method: "POST",
       headers,
-      body: JSON.stringify(payload),
+      body: bodyStr,
       signal: controller.signal,
     });
 
@@ -313,7 +317,7 @@ export async function sendInfoflowPrivateMessage(params: {
 
     return { ok: true, invaliduser: innerData?.invaliduser as string | undefined, msgkey };
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
+    const errMsg = formatInfoflowError(err);
     getInfoflowSendLog().error(`[infoflow:sendPrivate] exception: ${errMsg}`);
     return { ok: false, error: errMsg };
   } finally {
@@ -379,6 +383,15 @@ export async function sendInfoflowGroupMessage(params: {
         const { href } = parseLinkContent(item.content);
         body.push({ type: "LINK", href });
       }
+    } else if (type === "at-agent") {
+      // Robot AT: parse comma-separated numeric IDs into atagentids
+      const agentIds = item.content
+        .split(",")
+        .map((s) => Number(s.trim()))
+        .filter(Number.isFinite);
+      if (agentIds.length > 0) {
+        body.push({ type: "AT", atuserids: [], atagentids: agentIds });
+      }
     }
   }
 
@@ -417,10 +430,15 @@ export async function sendInfoflowGroupMessage(params: {
       "Content-Type": "application/json",
     };
 
+    const bodyStr = JSON.stringify(payload);
+
+    // Log request body when verbose logging is enabled
+    logVerbose(`[infoflow:sendGroup] POST body: ${bodyStr}`);
+
     const res = await fetch(`${ensureHttps(apiHost)}${INFOFLOW_GROUP_SEND_PATH}`, {
       method: "POST",
       headers,
-      body: JSON.stringify(payload),
+      body: bodyStr,
       signal: controller.signal,
     });
 
@@ -452,7 +470,7 @@ export async function sendInfoflowGroupMessage(params: {
 
     return { ok: true, messageid };
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
+    const errMsg = formatInfoflowError(err);
     getInfoflowSendLog().error(`[infoflow:sendGroup] exception: ${errMsg}`);
     return { ok: false, error: errMsg };
   } finally {

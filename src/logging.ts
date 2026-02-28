@@ -96,36 +96,18 @@ export function formatInfoflowError(err: unknown, options?: FormatErrorOptions):
   return String(err);
 }
 
-export type LogApiErrorOptions = {
-  /** Logger to use (defaults to send logger) */
-  logger?: RuntimeLogger;
-  /** Include stack trace in the log (default: false) */
-  includeStack?: boolean;
-};
-
 /**
- * Log an API error with operation context and structured metadata.
- * @param operation - The API operation name (e.g., "sendPrivate", "getToken")
- * @param error - The error to log
- * @param options - Logging options
+ * Log a message when verbose mode is enabled.
+ * Checks shouldLogVerbose() via PluginRuntime, then writes to console for
+ * --verbose terminal output. Safe to call before runtime is initialized.
  */
-export function logInfoflowApiError(
-  operation: string,
-  error: unknown,
-  options?: LogApiErrorOptions | RuntimeLogger,
-): void {
-  // Support legacy signature: logInfoflowApiError(op, err, logger)
-  const opts: LogApiErrorOptions =
-    options && "error" in options ? { logger: options as RuntimeLogger } : (options ?? {});
-
-  const log = opts.logger ?? getInfoflowSendLog();
-  const errMsg = formatInfoflowError(error, { includeStack: opts.includeStack });
-
-  // Use structured meta for better log aggregation and filtering
-  log.error(`[infoflow:${operation}] ${errMsg}`, {
-    operation,
-    errorType: error instanceof Error ? error.constructor.name : typeof error,
-  });
+export function logVerbose(message: string): void {
+  try {
+    if (!getInfoflowRuntime().logging.shouldLogVerbose()) return;
+    console.log(message);
+  } catch {
+    // runtime not available, skip verbose logging
+  }
 }
 
 // ---------------------------------------------------------------------------

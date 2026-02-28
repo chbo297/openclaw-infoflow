@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("./runtime.js", () => ({
   getInfoflowRuntime: vi.fn(() => ({
-    logging: { shouldLogVerbose: () => false },
+    logging: { shouldLogVerbose: () => false, logVerbose: () => {} },
   })),
 }));
 
@@ -47,10 +47,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
-
-// ============================================================================
-// getAppAccessToken
-// ============================================================================
 
 // ============================================================================
 // sendInfoflowMessage
@@ -206,6 +202,56 @@ describe("sendInfoflowMessage", () => {
       { type: "LINK", href: "https://docs.example.com" },
     ]);
   });
+
+  it("strips infoflow: prefix from target and routes to private", async () => {
+    mockFetch.mockResolvedValueOnce(mockTokenResponse("tok-1")).mockResolvedValueOnce({
+      ok: true,
+      text: () =>
+        Promise.resolve(JSON.stringify({ code: "ok", data: { errcode: 0, msgkey: "msg-pfx" } })),
+    });
+
+    const result = await sendInfoflowMessage({
+      cfg: {} as never,
+      to: "infoflow:chengbo05",
+      contents: [{ type: "text", content: "hello" }],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.messageId).toBe("msg-pfx");
+    // Verify the private send API was called (not group)
+    const [url] = mockFetch.mock.calls[1] as [string];
+    expect(url).toContain("/api/v1/app/message/send");
+  });
+
+  it("sends group message with AT and at-agent content items", async () => {
+    mockFetch.mockResolvedValueOnce(mockTokenResponse("tok-1")).mockResolvedValueOnce({
+      ok: true,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({ code: "ok", data: { errcode: 0, data: { messageid: "grp-at" } } }),
+        ),
+    });
+
+    const result = await sendInfoflowMessage({
+      cfg: {} as never,
+      to: "group:99999",
+      contents: [
+        { type: "at", content: "user1,user2" },
+        { type: "at-agent", content: "1282,1283" },
+        { type: "markdown", content: "Hello team" },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+
+    const [, opts] = mockFetch.mock.calls[1] as [string, RequestInit];
+    const body = JSON.parse(opts.body as string) as { message: { body: unknown[] } };
+    expect(body.message.body).toEqual([
+      { type: "AT", atuserids: ["user1", "user2"] },
+      { type: "AT", atuserids: [], atagentids: [1282, 1283] },
+      { type: "MD", content: "Hello team" },
+    ]);
+  });
 });
 
 // ============================================================================
@@ -264,5 +310,29 @@ describe("getAppAccessToken", () => {
     mockFetch.mockRejectedValueOnce(new Error("ECONNREFUSED"));
     const result = await getAppAccessToken(BASE_PARAMS);
     expect(result).toEqual({ ok: false, error: "ECONNREFUSED" });
+  });
+
+  it("returns error on HTTP non-ok response", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+    const result = await getAppAccessToken(BASE_PARAMS);
+    expect(result).toEqual({ ok: false, error: "HTTP 500" });
+  });
+
+  it("returns error on API errcode response", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ errcode: 40001, errmsg: "invalid appkey" }),
+    });
+    const result = await getAppAccessToken(BASE_PARAMS);
+    expect(result).toEqual({ ok: false, error: "invalid appkey" });
+  });
+
+  it("returns error when token is missing in response", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ errcode: 0, data: { expires_in: 7200 } }),
+    });
+    const result = await getAppAccessToken(BASE_PARAMS);
+    expect(result).toEqual({ ok: false, error: "no token in response" });
   });
 });
