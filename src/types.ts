@@ -167,6 +167,8 @@ export type InfoflowMessageEvent = {
   bodyItems?: InfoflowInboundBodyItem[];
   /** Non-bot mention IDs extracted from AT items in group messages (excluding bot itself) */
   mentionIds?: InfoflowMentionIds;
+  /** Reply/quote context extracted from replyData body items (supports multiple quotes) */
+  replyContext?: string[];
 };
 
 // ---------------------------------------------------------------------------

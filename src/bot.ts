@@ -364,9 +364,16 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
   // Build two versions: mes (for CommandBody, no @xxx) and rawMes (for RawBody, with @xxx)
   let textContent = "";
   let rawTextContent = "";
+  const replyContextItems: string[] = [];
   if (Array.isArray(bodyItems)) {
     for (const item of bodyItems) {
-      if (item.type === "TEXT") {
+      if (item.type === "replyData") {
+        // 引用回复：提取被引用消息的内容（可能有多条引用）
+        const replyBody = (item.content ?? "").trim();
+        if (replyBody) {
+          replyContextItems.push(replyBody);
+        }
+      } else if (item.type === "TEXT") {
         textContent += item.content ?? "";
         rawTextContent += item.content ?? "";
       } else if (item.type === "LINK") {
@@ -385,11 +392,17 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
     }
   }
 
-  const mes = textContent.trim() || String(msgData.content ?? msgData.text ?? "");
+  let mes = textContent.trim() || String(msgData.content ?? msgData.text ?? "");
   const rawMes = rawTextContent.trim() || mes;
 
-  if (!mes) {
+  const replyContext = replyContextItems.length > 0 ? replyContextItems : undefined;
+
+  if (!mes && !replyContext) {
     return;
+  }
+  // If mes is empty but replyContext exists, use a placeholder so the message is not dropped
+  if (!mes && replyContext) {
+    mes = "(引用回复)";
   }
 
   // Extract sender name from header or fallback to fromuser
@@ -411,6 +424,7 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
       bodyItems,
       mentionIds:
         mentionIds.userIds.length > 0 || mentionIds.agentIds.length > 0 ? mentionIds : undefined,
+      replyContext,
     },
     accountId,
     statusSink,
@@ -494,6 +508,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     OriginatingChannel: "infoflow",
     OriginatingTo: toAddress,
     WasMentioned: isGroup ? event.wasMentioned : undefined,
+    ReplyToBody: event.replyContext ? event.replyContext.join("\n---\n") : undefined,
     CommandAuthorized: true,
   });
 
