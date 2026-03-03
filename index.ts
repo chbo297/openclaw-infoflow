@@ -11,7 +11,12 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setInfoflowRuntime(api.runtime);
     api.registerChannel({ plugin: infoflowPlugin });
-    api.registerHttpHandler(handleInfoflowWebhookRequest);
+    api.registerHttpRoute({
+      path: "/webhook/infoflow",
+      auth: "plugin",
+      match: "exact",
+      handler: handleInfoflowWebhookRequest,
+    });
   },
 };
 

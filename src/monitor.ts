@@ -65,7 +65,7 @@ function registerInfoflowWebhookTarget(target: WebhookTarget): () => void {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP handler (registered via api.registerHttpHandler)
+// HTTP handler (registered via api.registerHttpRoute)
 // ---------------------------------------------------------------------------
 
 /**
