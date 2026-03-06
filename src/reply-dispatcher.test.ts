@@ -38,6 +38,13 @@ vi.mock("./send.js", () => ({
   sendInfoflowMessage: mockSendInfoflowMessage,
 }));
 
+const mockPrepareInfoflowImageBase64 = vi.hoisted(() => vi.fn());
+const mockSendInfoflowImageMessage = vi.hoisted(() => vi.fn());
+vi.mock("./media.js", () => ({
+  prepareInfoflowImageBase64: mockPrepareInfoflowImageBase64,
+  sendInfoflowImageMessage: mockSendInfoflowImageMessage,
+}));
+
 import { createInfoflowReplyDispatcher } from "./reply-dispatcher.js";
 
 // ---------------------------------------------------------------------------
@@ -48,6 +55,9 @@ describe("createInfoflowReplyDispatcher", () => {
   beforeEach(() => {
     mockSendInfoflowMessage.mockReset();
     mockSendInfoflowMessage.mockResolvedValue({ ok: true, messageId: "msg-1" });
+    mockPrepareInfoflowImageBase64.mockReset();
+    mockSendInfoflowImageMessage.mockReset();
+    mockSendInfoflowImageMessage.mockResolvedValue({ ok: true, messageId: "img-1" });
   });
 
   it("returns dispatcherOptions with deliver and onError", () => {

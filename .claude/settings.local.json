@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfeat: add assistant watchMentions, followUp, replyMode and actions support\n\n- Add watchMentions config for assistant-style replies when watched users are @mentioned\n- Add @mention detection and resolution in group messages \\(user and agent\\)\n- Add followUp window for automatic follow-up replies after bot interaction\n- Add 5 replyMode options: ignore, record, mention-only, mention-and-watch, proactive\n- Add ChannelMessageActionAdapter for LLM-initiated message sends\n- Refactor logging: unified logVerbose\\(\\) and formatInfoflowError\\(\\)\n- Update openclaw.plugin.json config schema with new group config format \\(breaking change\\)\n- Add CHANGELOG.md\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(npm publish:*)"
+    ]
+  }
+}

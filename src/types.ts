@@ -25,6 +25,8 @@ export type InfoflowGroupConfig = {
   followUp?: boolean;
   followUpWindow?: number;
   systemPrompt?: string;
+  /** Enable thinking indicator ("收到🤔...") before processing (default: true) */
+  thinkingIndicator?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -42,6 +44,8 @@ export type InfoflowInboundBodyItem = {
   name?: string;
   /** 人类用户 AT 时有此字段（uuap name），与 robotid 互斥 */
   userid?: string;
+  /** IMAGE 类型 body item 的图片下载地址 */
+  downloadurl?: string;
 };
 
 /** Mention IDs extracted from inbound group AT items (excluding the bot itself) */
@@ -69,12 +73,23 @@ export type InfoflowGroupMessageBodyItem =
   | { type: "TEXT"; content: string }
   | { type: "MD"; content: string }
   | { type: "AT"; atall?: boolean; atuserids: string[]; atagentids?: number[] }
-  | { type: "LINK"; href: string };
+  | { type: "LINK"; href: string }
+  | { type: "IMAGE"; content: string };
 
 /** Content item for sendInfoflowMessage */
 export type InfoflowMessageContentItem = {
-  type: "text" | "markdown" | "at" | "at-agent" | "link";
+  type: "text" | "markdown" | "at" | "at-agent" | "link" | "image";
   content: string;
+};
+
+/** Outbound reply/quote context for group messages */
+export type InfoflowOutboundReply = {
+  /** Message ID of the message being replied to (string to preserve large integer precision) */
+  messageid: string;
+  /** Preview text of the quoted message */
+  preview?: string;
+  /** "1" = reply (default), "2" = quote */
+  replytype?: "1" | "2";
 };
 
 // ---------------------------------------------------------------------------
@@ -105,6 +120,10 @@ export type InfoflowAccountConfig = {
   followUp?: boolean;
   /** Follow-up window in seconds after last bot reply (default: 300) */
   followUpWindow?: number;
+  /** Enable thinking indicator ("收到🤔...") before processing (default: true) */
+  thinkingIndicator?: boolean;
+  /** 如流企业后台的应用ID（私聊消息撤回依赖此字段） */
+  appAgentId?: number;
   /** Per-group configuration overrides, keyed by group ID */
   groups?: Record<string, InfoflowGroupConfig>;
   accounts?: Record<string, InfoflowAccountConfig>;
@@ -140,6 +159,10 @@ export type ResolvedInfoflowAccount = {
     followUp?: boolean;
     /** Follow-up window in seconds after last bot reply (default: 300) */
     followUpWindow?: number;
+    /** Enable thinking indicator ("收到🤔...") before processing (default: true) */
+    thinkingIndicator?: boolean;
+    /** 如流企业后台的应用ID（私聊消息撤回依赖此字段） */
+    appAgentId?: number;
     /** Per-group configuration overrides, keyed by group ID */
     groups?: Record<string, InfoflowGroupConfig>;
   };
@@ -169,6 +192,8 @@ export type InfoflowMessageEvent = {
   mentionIds?: InfoflowMentionIds;
   /** Reply/quote context extracted from replyData body items (supports multiple quotes) */
   replyContext?: string[];
+  /** Image download URLs extracted from IMAGE body items (group) or PicUrl (private) */
+  imageUrls?: string[];
 };
 
 // ---------------------------------------------------------------------------

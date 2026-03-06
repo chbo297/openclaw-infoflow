@@ -125,7 +125,7 @@ https://your-domain/webhook/infoflow
 {
   channels: {
     infoflow: {
-      replyMode: "mention-only", // 全局默认
+      replyMode: "mention-and-watch", // 全局默认
       groups: {
         "123456": {
           replyMode: "mention-and-watch",
@@ -170,7 +170,7 @@ https://your-domain/webhook/infoflow
   channels: {
     infoflow: {
       enabled: true,
-      replyMode: "mention-only", // 所有账号的默认值
+      replyMode: "mention-and-watch", // 所有账号的默认值
       accounts: {
         work: {
           checkToken: "token-1",
@@ -293,7 +293,7 @@ openclaw plugins install ./path/to/openclaw-infoflow
       encodingAESKey: "your-encoding-aes-key",
       appKey: "your-app-key",
       appSecret: "your-app-secret",
-      robotName: "MyBot", // Required: used for @mention detection in groups
+      robotName: "MyBot", // used for @mention detection in groups
     },
   },
 }

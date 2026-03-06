@@ -334,7 +334,6 @@ function tryDecryptAndDispatch(params: DecryptDispatchParams): ParseResult {
         );
       });
 
-      logVerbose(`[infoflow] ${chatType}: message dispatched successfully`);
       return { handled: true, statusCode: 200, body: "success" };
     }
   }

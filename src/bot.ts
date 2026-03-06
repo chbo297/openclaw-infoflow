@@ -1,11 +1,27 @@
+import {
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  type HistoryEntry,
+  recordPendingHistoryEntryIfEnabled,
+  buildAgentMediaPayload,
+  type OpenClawConfig,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk";
 import { resolveInfoflowAccount } from "./accounts.js";
 import { getInfoflowBotLog, formatInfoflowError, logVerbose } from "./logging.js";
 import { createInfoflowReplyDispatcher } from "./reply-dispatcher.js";
 import { getInfoflowRuntime } from "./runtime.js";
+import {
+  sendInfoflowMessage,
+  recallInfoflowGroupMessage,
+  recallInfoflowPrivateMessage,
+} from "./send.js";
 import type {
   InfoflowChatType,
   InfoflowMessageEvent,
   InfoflowMentionIds,
+  InfoflowOutboundReply,
   InfoflowReplyMode,
   InfoflowGroupConfig,
   HandleInfoflowMessageParams,
@@ -36,6 +52,8 @@ type InfoflowBodyItem = {
   name?: string;
   /** 人类用户 AT 时有此字段（uuap name），与 robotid 互斥 */
   userid?: string;
+  /** IMAGE 类型 body item 的图片下载地址 */
+  downloadurl?: string;
 };
 
 /**
@@ -219,6 +237,9 @@ function buildProactivePrompt(): string {
 /** In-memory map tracking bot's last reply timestamp per group */
 const groupLastReplyMap = new Map<string, number>();
 
+/** In-memory map accumulating recent group messages for context injection when bot is @mentioned */
+const chatHistories = new Map<string, HistoryEntry[]>();
+
 /** Record that the bot replied to a group (called after successful send) */
 export function recordGroupReply(groupId: string): void {
   groupLastReplyMap.set(groupId, Date.now());
@@ -241,6 +262,7 @@ type ResolvedGroupConfig = {
   followUpWindow: number;
   watchMentions: string[];
   systemPrompt?: string;
+  thinkingIndicator: boolean;
 };
 
 /** Infer replyMode from legacy requireMention + watchMentions fields */
@@ -265,7 +287,102 @@ function resolveGroupConfig(
     followUpWindow: groupCfg?.followUpWindow ?? account.config.followUpWindow ?? 300,
     watchMentions: groupCfg?.watchMentions ?? account.config.watchMentions ?? [],
     systemPrompt: groupCfg?.systemPrompt,
+    thinkingIndicator: groupCfg?.thinkingIndicator ?? account.config.thinkingIndicator ?? true,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Thinking indicator (收到🤔...)
+// ---------------------------------------------------------------------------
+
+type ThinkingIndicatorHandle = {
+  messageid: string;
+  msgseqid: string;
+};
+
+/**
+ * Sends a "收到🤔..." thinking indicator message.
+ * Returns message IDs needed for recall, or undefined on failure.
+ */
+async function sendThinkingIndicator(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  accountId: string;
+  replyTo?: InfoflowOutboundReply;
+}): Promise<ThinkingIndicatorHandle | undefined> {
+  const { cfg, to, accountId, replyTo } = params;
+  try {
+    const result = await sendInfoflowMessage({
+      cfg,
+      to,
+      contents: [{ type: "text", content: "收到🤔..." }],
+      accountId,
+      replyTo,
+    });
+    if (result.ok && result.messageId) {
+      logVerbose(
+        `[infoflow] thinking indicator sent: to=${to}, messageId=${result.messageId}, msgseqid=${result.msgseqid ?? "n/a"}`,
+      );
+      return { messageid: result.messageId, msgseqid: result.msgseqid ?? "" };
+    }
+    if (!result.ok) {
+      logVerbose(`[infoflow] thinking indicator send failed: ${result.error}`);
+    }
+    return undefined;
+  } catch (err) {
+    logVerbose(`[infoflow] thinking indicator exception: ${formatInfoflowError(err)}`);
+    return undefined;
+  }
+}
+
+/**
+ * Recalls a previously sent thinking indicator (group or private).
+ * Silently swallows errors to avoid disrupting the reply flow.
+ */
+async function recallThinkingIndicator(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  handle: ThinkingIndicatorHandle;
+  groupId?: number;
+  isPrivate?: boolean;
+}): Promise<void> {
+  const { cfg, accountId, handle, groupId, isPrivate } = params;
+  try {
+    const account = resolveInfoflowAccount({ cfg, accountId });
+    if (isPrivate) {
+      const appAgentId = account.config.appAgentId;
+      if (!appAgentId) {
+        logVerbose(
+          `[infoflow] thinking indicator private recall skipped: appAgentId not configured`,
+        );
+        return;
+      }
+      const result = await recallInfoflowPrivateMessage({
+        account,
+        msgkey: handle.messageid,
+        appAgentId,
+      });
+      if (result.ok) {
+        logVerbose(`[infoflow] thinking indicator recalled (private)`);
+      } else {
+        logVerbose(`[infoflow] thinking indicator private recall failed: ${result.error}`);
+      }
+    } else if (groupId !== undefined) {
+      const result = await recallInfoflowGroupMessage({
+        account,
+        groupId,
+        messageid: handle.messageid,
+        msgseqid: handle.msgseqid,
+      });
+      if (result.ok) {
+        logVerbose(`[infoflow] thinking indicator recalled: groupId=${groupId}`);
+      } else {
+        logVerbose(`[infoflow] thinking indicator recall failed: ${result.error}`);
+      }
+    }
+  } catch (err) {
+    logVerbose(`[infoflow] thinking indicator recall exception: ${formatInfoflowError(err)}`);
+  }
 }
 
 /**
@@ -290,12 +407,26 @@ export async function handlePrivateChatMessage(params: HandlePrivateChatParams):
   const createTime = msgData.CreateTime ?? msgData.createtime;
   const timestamp = createTime != null ? Number(createTime) * 1000 : Date.now();
 
+  // Detect image messages: MsgType=image with PicUrl
+  const msgType = String(msgData.MsgType ?? msgData.msgtype ?? "");
+  const picUrl = String(msgData.PicUrl ?? msgData.picurl ?? "");
+  const imageUrls: string[] = [];
+  if (msgType === "image" && picUrl.trim()) {
+    imageUrls.push(picUrl.trim());
+  }
+
   logVerbose(
-    `[infoflow] private chat: fromuser=${fromuser}, senderName=${senderName}, raw msgData: ${JSON.stringify(msgData)}`,
+    `[infoflow] private chat: fromuser=${fromuser}, senderName=${senderName}, mes=${mes}, msgType=${msgType}, raw msgData: ${JSON.stringify(msgData)}`,
   );
 
-  if (!fromuser || !mes.trim()) {
+  if (!fromuser || (!mes.trim() && imageUrls.length === 0)) {
     return;
+  }
+
+  // For image-only messages (no text), use placeholder
+  let effectiveMes = mes.trim();
+  if (!effectiveMes && imageUrls.length > 0) {
+    effectiveMes = "<media:image>";
   }
 
   // Delegate to the common message handler (private chat)
@@ -303,11 +434,12 @@ export async function handlePrivateChatMessage(params: HandlePrivateChatParams):
     cfg,
     event: {
       fromuser,
-      mes,
+      mes: effectiveMes,
       chatType: "direct",
       senderName,
       messageId: messageIdStr,
       timestamp,
+      imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
     },
     accountId,
     statusSink,
@@ -365,6 +497,7 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
   let textContent = "";
   let rawTextContent = "";
   const replyContextItems: string[] = [];
+  const imageUrls: string[] = [];
   if (Array.isArray(bodyItems)) {
     for (const item of bodyItems) {
       if (item.type === "replyData") {
@@ -388,6 +521,12 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
         if (name) {
           rawTextContent += `@${name} `;
         }
+      } else if (item.type === "IMAGE") {
+        // 提取图片下载地址
+        const url = item.downloadurl;
+        if (typeof url === "string" && url.trim()) {
+          imageUrls.push(url.trim());
+        }
       }
     }
   }
@@ -397,8 +536,12 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
 
   const replyContext = replyContextItems.length > 0 ? replyContextItems : undefined;
 
-  if (!mes && !replyContext) {
+  if (!mes && !replyContext && imageUrls.length === 0) {
     return;
+  }
+  // 纯图片消息：设置占位符
+  if (!mes && imageUrls.length > 0) {
+    mes = `<media:image>${imageUrls.length > 1 ? ` (${imageUrls.length} images)` : ""}`;
   }
   // If mes is empty but replyContext exists, use a placeholder so the message is not dropped
   if (!mes && replyContext) {
@@ -425,6 +568,7 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
       mentionIds:
         mentionIds.userIds.length > 0 || mentionIds.agentIds.length > 0 ? mentionIds : undefined,
       replyContext,
+      imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
     },
     accountId,
     statusSink,
@@ -477,7 +621,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
   // Build conversation label and from address based on chat type
   const fromLabel = isGroup ? `group:${groupId}` : senderName || fromuser;
   const fromAddress = isGroup ? `infoflow:group:${groupId}` : `infoflow:${fromuser}`;
-  const toAddress = isGroup ? `infoflow:${groupId}` : `infoflow:${account.accountId}`;
+  const toAddress = isGroup ? `infoflow:group:${groupId}` : `infoflow:${fromuser}`;
 
   const body = core.channel.reply.formatAgentEnvelope({
     channel: "Infoflow",
@@ -488,8 +632,116 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     body: mes,
   });
 
+  // Inject accumulated group chat history into the body for context
+  const historyKey = isGroup && groupId !== undefined ? String(groupId) : undefined;
+  let combinedBody = body;
+  if (isGroup && historyKey) {
+    combinedBody = buildPendingHistoryContextFromMap({
+      historyMap: chatHistories,
+      historyKey,
+      limit: DEFAULT_GROUP_HISTORY_LIMIT,
+      currentMessage: body,
+      formatEntry: (entry) =>
+        core.channel.reply.formatAgentEnvelope({
+          channel: "Infoflow",
+          from: entry.sender,
+          timestamp: entry.timestamp ?? Date.now(),
+          body: entry.body,
+        }),
+    });
+  }
+
+  const inboundHistory =
+    isGroup && historyKey
+      ? (chatHistories.get(historyKey) ?? []).map((e) => ({
+          sender: e.sender,
+          body: e.body,
+          timestamp: e.timestamp,
+        }))
+      : undefined;
+
+  // --- Resolve inbound media (images) ---
+  const INFOFLOW_MAX_IMAGES = 20;
+  const mediaMaxBytes = 30 * 1024 * 1024; // 30MB default, matching Feishu
+  const mediaList: Array<{ path: string; contentType?: string }> = [];
+  const failReasons: string[] = [];
+
+  if (event.imageUrls && event.imageUrls.length > 0) {
+    // Collect unique hostnames from image URLs for SSRF allowlist.
+    // Infoflow image servers (e.g. xp2.im.baidu.com, e4hi.im.baidu.com) resolve to
+    // internal IPs on Baidu's network, so they need to be explicitly allowed.
+    const allowedHostnames: string[] = [];
+    for (const imageUrl of event.imageUrls) {
+      try {
+        const hostname = new URL(imageUrl).hostname;
+        if (hostname && !allowedHostnames.includes(hostname)) {
+          allowedHostnames.push(hostname);
+        }
+      } catch {
+        // invalid URL, will fail at fetch time
+      }
+    }
+    const ssrfPolicy = allowedHostnames.length > 0 ? { allowedHostnames } : undefined;
+
+    const urls = event.imageUrls.slice(0, INFOFLOW_MAX_IMAGES);
+    const results = await Promise.allSettled(
+      urls.map(async (imageUrl) => {
+        const fetched = await core.channel.media.fetchRemoteMedia({
+          url: imageUrl,
+          maxBytes: mediaMaxBytes,
+          ssrfPolicy,
+        });
+        const saved = await core.channel.media.saveMediaBuffer(
+          fetched.buffer,
+          fetched.contentType ?? undefined,
+          "inbound",
+          mediaMaxBytes,
+        );
+        logVerbose(`[infoflow] downloaded image from ${imageUrl}, saved to ${saved.path}`);
+        return { path: saved.path, contentType: saved.contentType ?? fetched.contentType };
+      }),
+    );
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        mediaList.push(result.value);
+      } else {
+        const reason = String(result.reason);
+        logVerbose(`[infoflow] failed to download image: ${reason}`);
+        failReasons.push(reason);
+      }
+    }
+  }
+
+  const mediaPayload = buildAgentMediaPayload(mediaList);
+
+  // If user sent images but some/all downloads failed, adjust the body to inform the LLM.
+  const requestedImageCount = event.imageUrls?.length ?? 0;
+  const downloadedImageCount = mediaList.length;
+  const failedImageCount = requestedImageCount - downloadedImageCount;
+  if (requestedImageCount > 0 && failedImageCount > 0) {
+    // Deduplicate error reasons and truncate for readability
+    const uniqueReasons = [...new Set(failReasons)];
+    const reasonSummary = uniqueReasons.map((r) => r.slice(0, 200)).join("; ");
+
+    if (downloadedImageCount === 0) {
+      // All failed
+      const failNote =
+        `[The user sent ${requestedImageCount > 1 ? `${requestedImageCount} images` : "an image"}, ` +
+        `but failed to load: ${reasonSummary}]`;
+      if (combinedBody.includes("<media:image>")) {
+        combinedBody = combinedBody.replace(/<media:image>(\s*\(\d+ images\))?/, failNote);
+      } else {
+        combinedBody += `\n\n${failNote}`;
+      }
+    } else {
+      // Partial failure: some images loaded, some didn't
+      const failNote = `[${failedImageCount} of ${requestedImageCount} images failed to load: ${reasonSummary}]`;
+      combinedBody += `\n\n${failNote}`;
+    }
+  }
+
   const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: body,
+    Body: combinedBody,
     RawBody: event.rawMes ?? mes,
     CommandBody: mes,
     From: fromAddress,
@@ -509,7 +761,9 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     OriginatingTo: toAddress,
     WasMentioned: isGroup ? event.wasMentioned : undefined,
     ReplyToBody: event.replyContext ? event.replyContext.join("\n---\n") : undefined,
+    InboundHistory: inboundHistory,
     CommandAuthorized: true,
+    ...mediaPayload,
   });
 
   // Record session using recordInboundSession for proper session tracking
@@ -532,6 +786,14 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
 
     // "record" mode: save to session only, no think, no reply
     if (replyMode === "record") {
+      if (groupIdStr) {
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: chatHistories,
+          historyKey: groupIdStr,
+          entry: { sender: senderName || fromuser, body: mes, timestamp: Date.now() },
+          limit: DEFAULT_GROUP_HISTORY_LIMIT,
+        });
+      }
       return;
     }
 
@@ -550,6 +812,14 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
         ) {
           ctxPayload.GroupSystemPrompt = buildFollowUpPrompt();
         } else {
+          if (groupIdStr) {
+            recordPendingHistoryEntryIfEnabled({
+              historyMap: chatHistories,
+              historyKey: groupIdStr,
+              entry: { sender: senderName || fromuser, body: mes, timestamp: Date.now() },
+              limit: DEFAULT_GROUP_HISTORY_LIMIT,
+            });
+          }
           return;
         }
       }
@@ -575,6 +845,14 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
           // Follow-up window: let LLM decide if this is a follow-up
           ctxPayload.GroupSystemPrompt = buildFollowUpPrompt();
         } else {
+          if (groupIdStr) {
+            recordPendingHistoryEntryIfEnabled({
+              historyMap: chatHistories,
+              historyKey: groupIdStr,
+              entry: { sender: senderName || fromuser, body: mes, timestamp: Date.now() },
+              limit: DEFAULT_GROUP_HISTORY_LIMIT,
+            });
+          }
           return;
         }
       }
@@ -608,6 +886,21 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
   // Build unified target: "group:<id>" for group chat, username for private chat
   const to = isGroup && groupId !== undefined ? `group:${groupId}` : fromuser;
 
+  // --- Thinking indicator ("收到🤔...") ---
+  const thinkingEnabled = groupCfg?.thinkingIndicator ?? account.config.thinkingIndicator ?? true;
+  let thinkingHandle: ThinkingIndicatorHandle | undefined;
+  if (thinkingEnabled) {
+    thinkingHandle = await sendThinkingIndicator({
+      cfg,
+      to,
+      accountId: account.accountId,
+      replyTo:
+        isGroup && event.messageId
+          ? { messageid: event.messageId, preview: mes.slice(0, 100) }
+          : undefined,
+    });
+  }
+
   // Provide mention context to the LLM so it can decide who to @mention
   if (isGroup && event.mentionIds) {
     const parts: string[] = [];
@@ -632,22 +925,72 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     atOptions: isGroup && event.wasMentioned ? { atUserIds: [fromuser] } : undefined,
     // Pass mention IDs for LLM-driven @mention resolution in outbound text
     mentionIds: isGroup ? event.mentionIds : undefined,
+    // Pass inbound messageId for outbound reply-to (group only)
+    replyToMessageId: isGroup ? event.messageId : undefined,
+    replyToPreview: isGroup ? mes : undefined,
   });
 
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
-    cfg,
-    dispatcherOptions,
-    replyOptions,
-  });
+  // Wrap dispatcher to recall thinking indicator before first delivery
+  const canRecallThinking = Boolean(thinkingHandle);
+  let thinkingRecalled = false;
+  const doRecallThinking = async () => {
+    if (thinkingRecalled || !canRecallThinking) return;
+    thinkingRecalled = true;
+    await recallThinkingIndicator({
+      cfg,
+      accountId: account.accountId,
+      handle: thinkingHandle!,
+      groupId: isGroup ? groupId : undefined,
+      isPrivate: !isGroup,
+    });
+  };
+
+  const originalDeliver = dispatcherOptions.deliver;
+  const wrappedDispatcherOptions = {
+    ...dispatcherOptions,
+    deliver: async (payload: ReplyPayload) => {
+      await doRecallThinking();
+      return originalDeliver(payload);
+    },
+    onCleanup: () => {
+      void doRecallThinking();
+    },
+  };
+
+  // Wrap dispatch in try/finally to guarantee the thinking indicator bound to
+  // this message is always recalled — even when queue policy drops/enqueues the
+  // message before typing activates (typing.cleanup skips onCleanup when inactive).
+  // doRecallThinking is idempotent (thinkingRecalled flag), so duplicate calls are no-ops.
+  let dispatchResult;
+  try {
+    dispatchResult = await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+      ctx: ctxPayload,
+      cfg,
+      dispatcherOptions: wrappedDispatcherOptions,
+      replyOptions,
+    });
+  } finally {
+    await doRecallThinking();
+  }
+
+  const didReply = dispatchResult?.queuedFinal ?? false;
+
+  // Clear accumulated history after dispatch (it's now in the session transcript)
+  if (isGroup && historyKey) {
+    clearHistoryEntriesIfEnabled({
+      historyMap: chatHistories,
+      historyKey,
+      limit: DEFAULT_GROUP_HISTORY_LIMIT,
+    });
+  }
 
   // Record bot reply timestamp for follow-up window tracking
-  if (isGroup && groupId !== undefined) {
+  if (didReply && isGroup && groupId !== undefined) {
     recordGroupReply(String(groupId));
   }
 
   logVerbose(
-    `[infoflow] dispatch complete: ${chatType} from ${fromuser}, hasGroupSystemPrompt=${Boolean(ctxPayload.GroupSystemPrompt)}`,
+    `[infoflow] dispatch complete: ${chatType} from ${fromuser}, replied=${didReply}, finalCount=${dispatchResult?.counts.final ?? 0}, hasGroupSystemPrompt=${Boolean(ctxPayload.GroupSystemPrompt)}`,
   );
 }
 

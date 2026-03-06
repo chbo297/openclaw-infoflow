@@ -13,6 +13,10 @@
       "appKey": { "type": "string" },
       "appSecret": { "type": "string" },
       "robotName": { "type": "string" },
+      "appAgentId": {
+        "type": "number",
+        "description": "如流企业后台的应用ID，私聊消息撤回依赖此字段"
+      },
       "dmPolicy": { "type": "string", "enum": ["open", "pairing", "allowlist"] },
       "allowFrom": { "type": "array", "items": { "type": "string" } },
       "groupPolicy": { "type": "string", "enum": ["open", "allowlist", "disabled"] },
@@ -26,6 +30,7 @@
       "followUp": { "type": "boolean", "default": true },
       "followUpWindow": { "type": "number", "default": 300 },
       "watchMentions": { "type": "array", "items": { "type": "string" } },
+      "thinkingIndicator": { "type": "boolean", "default": true },
       "groups": {
         "type": "object",
         "additionalProperties": {
@@ -38,7 +43,8 @@
             "watchMentions": { "type": "array", "items": { "type": "string" } },
             "followUp": { "type": "boolean" },
             "followUpWindow": { "type": "number" },
-            "systemPrompt": { "type": "string" }
+            "systemPrompt": { "type": "string" },
+            "thinkingIndicator": { "type": "boolean" }
           },
           "additionalProperties": false
         }
@@ -55,6 +61,10 @@
             "appKey": { "type": "string" },
             "appSecret": { "type": "string" },
             "robotName": { "type": "string" },
+            "appAgentId": {
+              "type": "number",
+              "description": "如流企业后台的应用ID，私聊消息撤回依赖此字段"
+            },
             "dmPolicy": { "type": "string", "enum": ["open", "pairing", "allowlist"] },
             "allowFrom": { "type": "array", "items": { "type": "string" } },
             "groupPolicy": { "type": "string", "enum": ["open", "allowlist", "disabled"] },
@@ -67,6 +77,7 @@
             "followUp": { "type": "boolean" },
             "followUpWindow": { "type": "number" },
             "watchMentions": { "type": "array", "items": { "type": "string" } },
+            "thinkingIndicator": { "type": "boolean" },
             "groups": {
               "type": "object",
               "additionalProperties": {
@@ -79,7 +90,8 @@
                   "watchMentions": { "type": "array", "items": { "type": "string" } },
                   "followUp": { "type": "boolean" },
                   "followUpWindow": { "type": "number" },
-                  "systemPrompt": { "type": "string" }
+                  "systemPrompt": { "type": "string" },
+                  "thinkingIndicator": { "type": "boolean" }
                 },
                 "additionalProperties": false
               }

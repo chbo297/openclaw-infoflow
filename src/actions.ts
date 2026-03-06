@@ -8,16 +8,296 @@ import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "open
 import { extractToolSend, jsonResult, readStringParam } from "openclaw/plugin-sdk";
 import { resolveInfoflowAccount } from "./accounts.js";
 import { logVerbose } from "./logging.js";
-import { sendInfoflowMessage } from "./send.js";
+import { prepareInfoflowImageBase64, sendInfoflowImageMessage } from "./media.js";
+import {
+  sendInfoflowMessage,
+  recallInfoflowGroupMessage,
+  recallInfoflowPrivateMessage,
+} from "./send.js";
+import {
+  findSentMessage,
+  querySentMessages,
+  removeRecalledMessages,
+} from "./sent-message-store.js";
 import { normalizeInfoflowTarget } from "./targets.js";
-import type { InfoflowMessageContentItem } from "./types.js";
+import type { InfoflowMessageContentItem, InfoflowOutboundReply } from "./types.js";
 
 export const infoflowMessageActions: ChannelMessageActionAdapter = {
-  listActions: (): ChannelMessageActionName[] => ["send"],
+  listActions: (): ChannelMessageActionName[] => ["send", "delete"],
 
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
 
   handleAction: async ({ action, params, cfg, accountId }) => {
+    // -----------------------------------------------------------------------
+    // delete (群消息撤回) — Mode A: by messageId, Mode B: by count
+    // -----------------------------------------------------------------------
+    if (action === "delete") {
+      const rawTo = readStringParam(params, "to", { required: true });
+      if (!rawTo) {
+        throw new Error("delete requires a target (to).");
+      }
+      const to = normalizeInfoflowTarget(rawTo) ?? rawTo;
+      const target = to.replace(/^infoflow:/i, "");
+
+      const account = resolveInfoflowAccount({ cfg, accountId: accountId ?? undefined });
+      if (!account.config.appKey || !account.config.appSecret) {
+        throw new Error("Infoflow appKey/appSecret not configured.");
+      }
+
+      const messageId = readStringParam(params, "messageId");
+      // Default to count=1 (recall latest message) when neither messageId nor count is provided
+      const countStr = readStringParam(params, "count") ?? (messageId ? undefined : "1");
+
+      const groupMatch = target.match(/^group:(\d+)/i);
+
+      if (groupMatch) {
+        // -----------------------------------------------------------------
+        // 群消息撤回
+        // -----------------------------------------------------------------
+        const groupId = Number(groupMatch[1]);
+
+        // Mode A: single message recall by messageId
+        if (messageId) {
+          let msgseqid = readStringParam(params, "msgseqid") ?? "";
+          if (!msgseqid) {
+            const stored = findSentMessage(account.accountId, messageId);
+            if (stored?.msgseqid) {
+              msgseqid = stored.msgseqid;
+            }
+          }
+          if (!msgseqid) {
+            throw new Error(
+              "delete requires msgseqid (not found in store; provide it explicitly or send messages first).",
+            );
+          }
+
+          const result = await recallInfoflowGroupMessage({
+            account,
+            groupId,
+            messageid: messageId,
+            msgseqid,
+          });
+
+          if (result.ok) {
+            try {
+              removeRecalledMessages(account.accountId, [messageId]);
+            } catch {
+              // ignore cleanup errors
+            }
+          }
+
+          return jsonResult({
+            ok: result.ok,
+            channel: "infoflow",
+            to,
+            ...(result.error ? { error: result.error } : {}),
+            _hint: result.ok
+              ? "Recall succeeded. Do NOT send any follow-up reply message to the user."
+              : "Recall failed. Send a brief reply stating only the failure reason.",
+          });
+        }
+
+        // Mode B: batch recall by count
+        if (countStr) {
+          const count = Number(countStr);
+          if (!Number.isFinite(count) || count < 1) {
+            throw new Error("count must be a positive integer.");
+          }
+
+          const records = querySentMessages(account.accountId, {
+            target: `group:${groupId}`,
+            count,
+          });
+          // Filter to records that have msgseqid (required for group recall)
+          const recallable = records.filter((r) => r.msgseqid);
+
+          if (recallable.length === 0) {
+            return jsonResult({
+              ok: true,
+              channel: "infoflow",
+              to,
+              recalled: 0,
+              message: "No recallable messages found in store.",
+              _hint: "No messages found to recall. Briefly inform the user.",
+            });
+          }
+
+          let succeeded = 0;
+          let failed = 0;
+          const recalledIds: string[] = [];
+          const details: Array<{
+            messageid: string;
+            digest: string;
+            ok: boolean;
+            error?: string;
+          }> = [];
+
+          for (const record of recallable) {
+            const result = await recallInfoflowGroupMessage({
+              account,
+              groupId,
+              messageid: record.messageid,
+              msgseqid: record.msgseqid,
+            });
+
+            if (result.ok) {
+              succeeded++;
+              recalledIds.push(record.messageid);
+              details.push({ messageid: record.messageid, digest: record.digest, ok: true });
+            } else {
+              failed++;
+              details.push({
+                messageid: record.messageid,
+                digest: record.digest,
+                ok: false,
+                error: result.error,
+              });
+            }
+          }
+
+          if (recalledIds.length > 0) {
+            try {
+              removeRecalledMessages(account.accountId, recalledIds);
+            } catch {
+              // ignore cleanup errors
+            }
+          }
+
+          return jsonResult({
+            ok: failed === 0,
+            channel: "infoflow",
+            to,
+            recalled: succeeded,
+            failed,
+            total: recallable.length,
+            details,
+            _hint:
+              failed === 0
+                ? "Recall succeeded. Do NOT send any follow-up reply message to the user."
+                : "Some recalls failed. Send a brief reply stating only the failure reason(s).",
+          });
+        }
+      } else {
+        // -----------------------------------------------------------------
+        // 私聊消息撤回
+        // -----------------------------------------------------------------
+        const appAgentId = account.config.appAgentId;
+        if (!appAgentId) {
+          throw new Error(
+            "Infoflow private message recall requires appAgentId configuration. " +
+              "Set channels.infoflow.appAgentId to your application ID (如流企业后台的应用ID).",
+          );
+        }
+
+        // Mode A: single message recall by messageId (msgkey)
+        if (messageId) {
+          const result = await recallInfoflowPrivateMessage({
+            account,
+            msgkey: messageId,
+            appAgentId,
+          });
+
+          if (result.ok) {
+            try {
+              removeRecalledMessages(account.accountId, [messageId]);
+            } catch {
+              // ignore cleanup errors
+            }
+          }
+
+          return jsonResult({
+            ok: result.ok,
+            channel: "infoflow",
+            to,
+            ...(result.error ? { error: result.error } : {}),
+            _hint: result.ok
+              ? "Recall succeeded. Do NOT send any follow-up reply message to the user."
+              : "Recall failed. Send a brief reply stating only the failure reason.",
+          });
+        }
+
+        // Mode B: batch recall by count
+        if (countStr) {
+          const count = Number(countStr);
+          if (!Number.isFinite(count) || count < 1) {
+            throw new Error("count must be a positive integer.");
+          }
+
+          const records = querySentMessages(account.accountId, { target, count });
+          // 私聊消息的 msgseqid 为空，只需要有 messageid (即 msgkey) 即可撤回
+          const recallable = records.filter((r) => r.messageid);
+
+          if (recallable.length === 0) {
+            return jsonResult({
+              ok: true,
+              channel: "infoflow",
+              to,
+              recalled: 0,
+              message: "No recallable messages found in store.",
+              _hint: "No messages found to recall. Briefly inform the user.",
+            });
+          }
+
+          let succeeded = 0;
+          let failed = 0;
+          const recalledIds: string[] = [];
+          const details: Array<{
+            messageid: string;
+            digest: string;
+            ok: boolean;
+            error?: string;
+          }> = [];
+
+          for (const record of recallable) {
+            const result = await recallInfoflowPrivateMessage({
+              account,
+              msgkey: record.messageid,
+              appAgentId,
+            });
+
+            if (result.ok) {
+              succeeded++;
+              recalledIds.push(record.messageid);
+              details.push({ messageid: record.messageid, digest: record.digest, ok: true });
+            } else {
+              failed++;
+              details.push({
+                messageid: record.messageid,
+                digest: record.digest,
+                ok: false,
+                error: result.error,
+              });
+            }
+          }
+
+          if (recalledIds.length > 0) {
+            try {
+              removeRecalledMessages(account.accountId, recalledIds);
+            } catch {
+              // ignore cleanup errors
+            }
+          }
+
+          return jsonResult({
+            ok: failed === 0,
+            channel: "infoflow",
+            to,
+            recalled: succeeded,
+            failed,
+            total: recallable.length,
+            details,
+            _hint:
+              failed === 0
+                ? "Recall succeeded. Do NOT send any follow-up reply message to the user."
+                : "Some recalls failed. Send a brief reply stating only the failure reason(s).",
+          });
+        }
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // send
+    // -----------------------------------------------------------------------
     if (action !== "send") {
       throw new Error(`Action "${action}" is not supported for Infoflow.`);
     }
@@ -41,6 +321,19 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
 
     const isGroup = /^group:\d+$/i.test(to);
     const contents: InfoflowMessageContentItem[] = [];
+
+    // Infoflow reply-to params (group only)
+    const replyToMessageId = readStringParam(params, "replyToMessageId");
+    const replyToPreview = readStringParam(params, "replyToPreview");
+    const replyTypeRaw = readStringParam(params, "replyType");
+    const replyTo: InfoflowOutboundReply | undefined =
+      replyToMessageId && isGroup
+        ? {
+            messageid: replyToMessageId,
+            preview: replyToPreview ?? undefined,
+            replytype: replyTypeRaw === "2" ? "2" : "1",
+          }
+        : undefined;
 
     // Build AT content nodes (group messages only)
     if (isGroup) {
@@ -79,7 +372,59 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (mediaUrl) {
-      contents.push({ type: "link", content: mediaUrl });
+      logVerbose(
+        `[infoflow:action:send] to=${to}, atAll=${atAll}, mentionUserIds=${mentionUserIdsRaw ?? "none"}`,
+      );
+
+      // Send text+mentions first (if any)
+      if (contents.length > 0) {
+        await sendInfoflowMessage({
+          cfg,
+          to,
+          contents,
+          accountId: accountId ?? undefined,
+          replyTo,
+        });
+      }
+
+      // Try native image send, fallback to link
+      try {
+        const prepared = await prepareInfoflowImageBase64({ mediaUrl });
+        if (prepared.isImage) {
+          const imgResult = await sendInfoflowImageMessage({
+            cfg,
+            to,
+            base64Image: prepared.base64,
+            accountId: accountId ?? undefined,
+            replyTo: contents.length > 0 ? undefined : replyTo,
+          });
+          return jsonResult({
+            ok: imgResult.ok,
+            channel: "infoflow",
+            to,
+            messageId: imgResult.messageId ?? (imgResult.ok ? "sent" : "failed"),
+            ...(imgResult.error ? { error: imgResult.error } : {}),
+          });
+        }
+      } catch {
+        // fallback to link below
+      }
+
+      // Non-image or native send failed → send as link
+      const linkResult = await sendInfoflowMessage({
+        cfg,
+        to,
+        contents: [{ type: "link", content: mediaUrl }],
+        accountId: accountId ?? undefined,
+        replyTo: contents.length > 0 ? undefined : replyTo,
+      });
+      return jsonResult({
+        ok: linkResult.ok,
+        channel: "infoflow",
+        to,
+        messageId: linkResult.messageId ?? (linkResult.ok ? "sent" : "failed"),
+        ...(linkResult.error ? { error: linkResult.error } : {}),
+      });
     }
 
     if (contents.length === 0) {
@@ -95,6 +440,7 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
       to,
       contents,
       accountId: accountId ?? undefined,
+      replyTo,
     });
 
     return jsonResult({
