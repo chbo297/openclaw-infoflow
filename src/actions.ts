@@ -22,6 +22,12 @@ import {
 import { normalizeInfoflowTarget } from "./targets.js";
 import type { InfoflowMessageContentItem, InfoflowOutboundReply } from "./types.js";
 
+// Recall result hint constants — reused across single/batch, group/private recall paths
+const RECALL_OK_HINT = "Recall succeeded. output only NO_REPLY with no other text.";
+const RECALL_FAIL_HINT = "Recall failed. Send a brief reply stating only the failure reason.";
+const RECALL_PARTIAL_HINT =
+  "Some recalls failed. Send a brief reply stating only the failure reason(s).";
+
 export const infoflowMessageActions: ChannelMessageActionAdapter = {
   listActions: (): ChannelMessageActionName[] => ["send", "delete"],
 
@@ -91,9 +97,7 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
             channel: "infoflow",
             to,
             ...(result.error ? { error: result.error } : {}),
-            _hint: result.ok
-              ? "Recall succeeded. Do NOT send any follow-up reply message to the user."
-              : "Recall failed. Send a brief reply stating only the failure reason.",
+            _hint: result.ok ? RECALL_OK_HINT : RECALL_FAIL_HINT,
           });
         }
 
@@ -171,10 +175,7 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
             failed,
             total: recallable.length,
             details,
-            _hint:
-              failed === 0
-                ? "Recall succeeded. Do NOT send any follow-up reply message to the user."
-                : "Some recalls failed. Send a brief reply stating only the failure reason(s).",
+            _hint: failed === 0 ? RECALL_OK_HINT : RECALL_PARTIAL_HINT,
           });
         }
       } else {
@@ -210,9 +211,7 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
             channel: "infoflow",
             to,
             ...(result.error ? { error: result.error } : {}),
-            _hint: result.ok
-              ? "Recall succeeded. Do NOT send any follow-up reply message to the user."
-              : "Recall failed. Send a brief reply stating only the failure reason.",
+            _hint: result.ok ? RECALL_OK_HINT : RECALL_FAIL_HINT,
           });
         }
 
@@ -286,10 +285,7 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
             failed,
             total: recallable.length,
             details,
-            _hint:
-              failed === 0
-                ? "Recall succeeded. Do NOT send any follow-up reply message to the user."
-                : "Some recalls failed. Send a brief reply stating only the failure reason(s).",
+            _hint: failed === 0 ? RECALL_OK_HINT : RECALL_PARTIAL_HINT,
           });
         }
       }

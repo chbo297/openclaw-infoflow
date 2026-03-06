@@ -25,8 +25,6 @@ export type InfoflowGroupConfig = {
   followUp?: boolean;
   followUpWindow?: number;
   systemPrompt?: string;
-  /** Enable thinking indicator ("收到🤔...") before processing (default: true) */
-  thinkingIndicator?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -120,8 +118,6 @@ export type InfoflowAccountConfig = {
   followUp?: boolean;
   /** Follow-up window in seconds after last bot reply (default: 300) */
   followUpWindow?: number;
-  /** Enable thinking indicator ("收到🤔...") before processing (default: true) */
-  thinkingIndicator?: boolean;
   /** 如流企业后台的应用ID（私聊消息撤回依赖此字段） */
   appAgentId?: number;
   /** Per-group configuration overrides, keyed by group ID */
@@ -159,8 +155,6 @@ export type ResolvedInfoflowAccount = {
     followUp?: boolean;
     /** Follow-up window in seconds after last bot reply (default: 300) */
     followUpWindow?: number;
-    /** Enable thinking indicator ("收到🤔...") before processing (default: true) */
-    thinkingIndicator?: boolean;
     /** 如流企业后台的应用ID（私聊消息撤回依赖此字段） */
     appAgentId?: number;
     /** Per-group configuration overrides, keyed by group ID */

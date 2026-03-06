@@ -5,23 +5,15 @@ import {
   type HistoryEntry,
   recordPendingHistoryEntryIfEnabled,
   buildAgentMediaPayload,
-  type OpenClawConfig,
-  type ReplyPayload,
 } from "openclaw/plugin-sdk";
 import { resolveInfoflowAccount } from "./accounts.js";
 import { getInfoflowBotLog, formatInfoflowError, logVerbose } from "./logging.js";
 import { createInfoflowReplyDispatcher } from "./reply-dispatcher.js";
 import { getInfoflowRuntime } from "./runtime.js";
-import {
-  sendInfoflowMessage,
-  recallInfoflowGroupMessage,
-  recallInfoflowPrivateMessage,
-} from "./send.js";
 import type {
   InfoflowChatType,
   InfoflowMessageEvent,
   InfoflowMentionIds,
-  InfoflowOutboundReply,
   InfoflowReplyMode,
   InfoflowGroupConfig,
   HandleInfoflowMessageParams,
@@ -262,7 +254,6 @@ type ResolvedGroupConfig = {
   followUpWindow: number;
   watchMentions: string[];
   systemPrompt?: string;
-  thinkingIndicator: boolean;
 };
 
 /** Infer replyMode from legacy requireMention + watchMentions fields */
@@ -287,147 +278,7 @@ function resolveGroupConfig(
     followUpWindow: groupCfg?.followUpWindow ?? account.config.followUpWindow ?? 300,
     watchMentions: groupCfg?.watchMentions ?? account.config.watchMentions ?? [],
     systemPrompt: groupCfg?.systemPrompt,
-    thinkingIndicator: groupCfg?.thinkingIndicator ?? account.config.thinkingIndicator ?? true,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Thinking indicator (收到🤔...)
-// ---------------------------------------------------------------------------
-
-type ThinkingIndicatorHandle = {
-  messageid: string;
-  msgseqid: string;
-};
-
-/**
- * Sends a "收到🤔..." thinking indicator message.
- * Returns message IDs needed for recall, or undefined on failure.
- */
-async function sendThinkingIndicator(params: {
-  cfg: OpenClawConfig;
-  to: string;
-  accountId: string;
-  replyTo?: InfoflowOutboundReply;
-}): Promise<ThinkingIndicatorHandle | undefined> {
-  const { cfg, to, accountId, replyTo } = params;
-  try {
-    const result = await sendInfoflowMessage({
-      cfg,
-      to,
-      contents: [{ type: "text", content: "收到🤔..." }],
-      accountId,
-      replyTo,
-      skipSentStore: true, // Thinking indicator is ephemeral; don't persist to SQLite
-    });
-    if (result.ok && result.messageId) {
-      logVerbose(
-        `[infoflow] thinking indicator sent: to=${to}, messageId=${result.messageId}, msgseqid=${result.msgseqid ?? "n/a"}`,
-      );
-      return { messageid: result.messageId, msgseqid: result.msgseqid ?? "" };
-    }
-    if (!result.ok) {
-      logVerbose(`[infoflow] thinking indicator send failed: ${result.error}`);
-    }
-    return undefined;
-  } catch (err) {
-    logVerbose(`[infoflow] thinking indicator exception: ${formatInfoflowError(err)}`);
-    return undefined;
-  }
-}
-
-/**
- * Recalls a previously sent thinking indicator (group or private).
- * Silently swallows errors to avoid disrupting the reply flow.
- */
-async function recallThinkingIndicator(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  handle: ThinkingIndicatorHandle;
-  groupId?: number;
-  isPrivate?: boolean;
-}): Promise<void> {
-  const { cfg, accountId, handle, groupId, isPrivate } = params;
-  try {
-    const account = resolveInfoflowAccount({ cfg, accountId });
-    if (isPrivate) {
-      const appAgentId = account.config.appAgentId;
-      if (!appAgentId) {
-        logVerbose(
-          `[infoflow] thinking indicator private recall skipped: appAgentId not configured`,
-        );
-        return;
-      }
-      const result = await recallInfoflowPrivateMessage({
-        account,
-        msgkey: handle.messageid,
-        appAgentId,
-      });
-      if (result.ok) {
-        logVerbose(`[infoflow] thinking indicator recalled (private)`);
-      } else {
-        logVerbose(`[infoflow] thinking indicator private recall failed: ${result.error}`);
-      }
-    } else if (groupId !== undefined) {
-      const result = await recallInfoflowGroupMessage({
-        account,
-        groupId,
-        messageid: handle.messageid,
-        msgseqid: handle.msgseqid,
-      });
-      if (result.ok) {
-        logVerbose(`[infoflow] thinking indicator recalled: groupId=${groupId}`);
-      } else {
-        logVerbose(`[infoflow] thinking indicator recall failed: ${result.error}`);
-      }
-    }
-  } catch (err) {
-    logVerbose(`[infoflow] thinking indicator recall exception: ${formatInfoflowError(err)}`);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Pending thinking indicator store (module-level)
-//
-// Tracks thinking indicators that need to be recalled before the next outbound
-// message to the same target. This bridges the gap when a message is enqueued
-// by queue policy — the handle survives across the handleInfoflowMessage →
-// followup-runner → outbound.sendText boundary.
-// ---------------------------------------------------------------------------
-
-type PendingThinkingEntry = {
-  handle: ThinkingIndicatorHandle;
-  accountId: string;
-  groupId?: number;
-  isPrivate: boolean;
-};
-
-/** key = outbound target (e.g. "group:123" or "username") */
-const pendingThinkingHandles = new Map<string, PendingThinkingEntry[]>();
-
-/**
- * Recalls all pending thinking indicators for the given target.
- * Called by outbound.sendText/sendMedia before delivering a reply.
- */
-export async function recallPendingThinkingIndicators(params: {
-  cfg: OpenClawConfig;
-  to: string;
-}): Promise<void> {
-  const entries = pendingThinkingHandles.get(params.to);
-  if (!entries || entries.length === 0) return;
-  // Remove first to prevent concurrent duplicate recalls
-  pendingThinkingHandles.delete(params.to);
-  await Promise.all(
-    entries.map((entry) =>
-      recallThinkingIndicator({
-        cfg: params.cfg,
-        accountId: entry.accountId,
-        handle: entry.handle,
-        groupId: entry.groupId,
-        isPrivate: entry.isPrivate,
-      }),
-    ),
-  );
 }
 
 /**
@@ -931,34 +782,6 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
   // Build unified target: "group:<id>" for group chat, username for private chat
   const to = isGroup && groupId !== undefined ? `group:${groupId}` : fromuser;
 
-  // --- Thinking indicator ("收到🤔...") ---
-  const thinkingEnabled = groupCfg?.thinkingIndicator ?? account.config.thinkingIndicator ?? true;
-  let thinkingHandle: ThinkingIndicatorHandle | undefined;
-  if (thinkingEnabled) {
-    thinkingHandle = await sendThinkingIndicator({
-      cfg,
-      to,
-      accountId: account.accountId,
-      replyTo:
-        isGroup && event.messageId
-          ? { messageid: event.messageId, preview: mes.slice(0, 100) }
-          : undefined,
-    });
-    // Register in pending map so outbound.sendText can recall it when the
-    // followup runner delivers the reply (enqueue path).
-    if (thinkingHandle) {
-      const entry: PendingThinkingEntry = {
-        handle: thinkingHandle,
-        accountId: account.accountId,
-        groupId: isGroup ? groupId : undefined,
-        isPrivate: !isGroup,
-      };
-      const existing = pendingThinkingHandles.get(to) ?? [];
-      existing.push(entry);
-      pendingThinkingHandles.set(to, existing);
-    }
-  }
-
   // Provide mention context to the LLM so it can decide who to @mention
   if (isGroup && event.mentionIds) {
     const parts: string[] = [];
@@ -988,45 +811,10 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     replyToPreview: isGroup ? mes : undefined,
   });
 
-  // Wrap dispatcher to recall thinking indicator before first delivery
-  const canRecallThinking = Boolean(thinkingHandle);
-  let thinkingRecalled = false;
-  const doRecallThinking = async () => {
-    if (thinkingRecalled || !canRecallThinking) return;
-    thinkingRecalled = true;
-    // Remove our handle from the pending map (prevent double-recall via outbound.sendText)
-    const entries = pendingThinkingHandles.get(to);
-    if (entries) {
-      const idx = entries.findIndex((e) => e.handle === thinkingHandle);
-      if (idx !== -1) entries.splice(idx, 1);
-      if (entries.length === 0) pendingThinkingHandles.delete(to);
-    }
-    await recallThinkingIndicator({
-      cfg,
-      accountId: account.accountId,
-      handle: thinkingHandle!,
-      groupId: isGroup ? groupId : undefined,
-      isPrivate: !isGroup,
-    });
-  };
-
-  const originalDeliver = dispatcherOptions.deliver;
-  const wrappedDispatcherOptions = {
-    ...dispatcherOptions,
-    deliver: async (payload: ReplyPayload) => {
-      // Fire recall concurrently — don't block reply delivery
-      void doRecallThinking();
-      return originalDeliver(payload);
-    },
-    onCleanup: () => {
-      void doRecallThinking();
-    },
-  };
-
   const dispatchResult = await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
-    dispatcherOptions: wrappedDispatcherOptions,
+    dispatcherOptions,
     replyOptions,
   });
 

@@ -26,6 +26,7 @@ import {
   findSentMessage,
   removeRecalledMessages,
   buildMessageDigest,
+  buildAgentFrom,
   _resetStore,
 } from "./sent-message-store.js";
 
@@ -38,15 +39,18 @@ const ACCOUNT_B = "other-account";
 const TARGET_GROUP = "group:12345";
 const TARGET_DM = "chengbo05";
 
-function makeRecord(overrides: Partial<Parameters<typeof recordSentMessage>[1]> = {}) {
+function makeRecord(
+  overrides: Partial<Parameters<typeof recordSentMessage>[1]> = {},
+): Parameters<typeof recordSentMessage>[1] {
   return {
     target: TARGET_GROUP,
+    from: "agent:12345",
     messageid: String(Date.now() + Math.random()),
     msgseqid: String(Math.floor(Math.random() * 999999)),
     digest: "hello world",
     sentAt: Date.now(),
     ...overrides,
-  };
+  } as Parameters<typeof recordSentMessage>[1];
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +191,45 @@ describe("sent-message-store", () => {
     const msgs = querySentMessages(ACCOUNT, { target: TARGET_GROUP, count: 10 });
     expect(msgs).toHaveLength(1);
     expect(msgs[0].messageid).toBe("new-msg");
+  });
+
+  // -------------------------------------------------------------------------
+  // from field
+  // -------------------------------------------------------------------------
+
+  it("stores and retrieves the from field", () => {
+    const record = makeRecord({ messageid: "from-test", from: "agent:999" });
+    recordSentMessage(ACCOUNT, record);
+
+    const found = findSentMessage(ACCOUNT, "from-test");
+    expect(found).toBeDefined();
+    expect(found!.from).toBe("agent:999");
+
+    const queried = querySentMessages(ACCOUNT, { target: TARGET_GROUP, count: 10 });
+    expect(queried[0].from).toBe("agent:999");
+  });
+
+  it("defaults from to empty string for records without from", () => {
+    const record = makeRecord({ messageid: "no-from", from: "" });
+    recordSentMessage(ACCOUNT, record);
+
+    const found = findSentMessage(ACCOUNT, "no-from");
+    expect(found).toBeDefined();
+    expect(found!.from).toBe("");
+  });
+});
+
+// ===========================================================================
+// buildAgentFrom
+// ===========================================================================
+
+describe("buildAgentFrom", () => {
+  it("returns agent:<id> when appAgentId is provided", () => {
+    expect(buildAgentFrom(12345)).toBe("agent:12345");
+  });
+
+  it("returns agent:unknown when appAgentId is undefined", () => {
+    expect(buildAgentFrom(undefined)).toBe("agent:unknown");
   });
 });
 

@@ -15,7 +15,7 @@ import {
   INFOFLOW_PRIVATE_SEND_PATH,
   INFOFLOW_GROUP_SEND_PATH,
 } from "./send.js";
-import { recordSentMessage } from "./sent-message-store.js";
+import { recordSentMessage, buildAgentFrom } from "./sent-message-store.js";
 import type { ResolvedInfoflowAccount, InfoflowOutboundReply } from "./types.js";
 
 /** Infoflow API image size limit: 1MB raw bytes */
@@ -225,6 +225,7 @@ export async function sendInfoflowGroupImage(params: {
       try {
         recordSentMessage(account.accountId, {
           target: `group:${groupId}`,
+          from: buildAgentFrom(account.config.appAgentId),
           messageid,
           msgseqid: msgseqid ?? "",
           digest: "image",
@@ -313,6 +314,7 @@ export async function sendInfoflowPrivateImage(params: {
       try {
         recordSentMessage(account.accountId, {
           target: toUser,
+          from: buildAgentFrom(account.config.appAgentId),
           messageid: msgkey,
           msgseqid: "",
           digest: "image",

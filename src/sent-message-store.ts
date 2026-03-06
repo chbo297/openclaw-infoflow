@@ -51,6 +51,7 @@ function getDb(): DatabaseSync {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       account_id TEXT NOT NULL,
       target TEXT NOT NULL,
+      from_id TEXT NOT NULL DEFAULT '',
       messageid TEXT NOT NULL,
       msgseqid TEXT NOT NULL DEFAULT '',
       digest TEXT NOT NULL DEFAULT '',
@@ -62,6 +63,13 @@ function getDb(): DatabaseSync {
       ON sent_messages(account_id, target, sent_at DESC);
   `);
 
+  // Migration: add from_id column to existing databases
+  try {
+    db.exec(`ALTER TABLE sent_messages ADD COLUMN from_id TEXT NOT NULL DEFAULT ''`);
+  } catch {
+    // Column already exists — ignore
+  }
+
   return db;
 }
 
@@ -71,6 +79,7 @@ function getDb(): DatabaseSync {
 
 export type SentMessageRecord = {
   target: string;
+  from: string;
   messageid: string;
   msgseqid: string;
   digest: string;
@@ -85,11 +94,12 @@ export function recordSentMessage(accountId: string, record: SentMessageRecord):
   try {
     const d = getDb();
     d.prepare(
-      `INSERT INTO sent_messages (account_id, target, messageid, msgseqid, digest, sent_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO sent_messages (account_id, target, from_id, messageid, msgseqid, digest, sent_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       accountId,
       record.target,
+      record.from,
       record.messageid,
       record.msgseqid,
       record.digest,
@@ -117,7 +127,7 @@ export function querySentMessages(
   const d = getDb();
   const rows = d
     .prepare(
-      `SELECT target, messageid, msgseqid, digest, sent_at
+      `SELECT target, from_id, messageid, msgseqid, digest, sent_at
        FROM sent_messages
        WHERE account_id = ? AND target = ?
        ORDER BY sent_at DESC
@@ -125,6 +135,7 @@ export function querySentMessages(
     )
     .all(accountId, params.target, params.count) as Array<{
     target: string;
+    from_id: string;
     messageid: string;
     msgseqid: string;
     digest: string;
@@ -133,6 +144,7 @@ export function querySentMessages(
 
   return rows.map((r) => ({
     target: r.target,
+    from: r.from_id,
     messageid: r.messageid,
     msgseqid: r.msgseqid,
     digest: r.digest,
@@ -150,18 +162,26 @@ export function findSentMessage(
   const d = getDb();
   const row = d
     .prepare(
-      `SELECT target, messageid, msgseqid, digest, sent_at
+      `SELECT target, from_id, messageid, msgseqid, digest, sent_at
        FROM sent_messages
        WHERE account_id = ? AND messageid = ?
        LIMIT 1`,
     )
     .get(accountId, messageid) as
-    | { target: string; messageid: string; msgseqid: string; digest: string; sent_at: number }
+    | {
+        target: string;
+        from_id: string;
+        messageid: string;
+        msgseqid: string;
+        digest: string;
+        sent_at: number;
+      }
     | undefined;
 
   if (!row) return undefined;
   return {
     target: row.target,
+    from: row.from_id,
     messageid: row.messageid,
     msgseqid: row.msgseqid,
     digest: row.digest,
@@ -179,6 +199,15 @@ export function removeRecalledMessages(accountId: string, messageids: string[]):
   d.prepare(
     `DELETE FROM sent_messages WHERE account_id = ? AND messageid IN (${placeholders})`,
   ).run(accountId, ...messageids);
+}
+
+// ---------------------------------------------------------------------------
+// From-ID builder
+// ---------------------------------------------------------------------------
+
+/** Builds a `from` identifier for self-sent (agent) messages. */
+export function buildAgentFrom(appAgentId: number | undefined): string {
+  return appAgentId != null ? `agent:${appAgentId}` : "agent:unknown";
 }
 
 // ---------------------------------------------------------------------------

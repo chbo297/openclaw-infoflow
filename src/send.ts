@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveInfoflowAccount } from "./accounts.js";
 import { recordSentMessageId } from "./infoflow-req-parse.js";
 import { getInfoflowSendLog, formatInfoflowError, logVerbose } from "./logging.js";
-import { recordSentMessage, buildMessageDigest } from "./sent-message-store.js";
+import { recordSentMessage, buildMessageDigest, buildAgentFrom } from "./sent-message-store.js";
 import type {
   InfoflowGroupMessageBodyItem,
   InfoflowMessageContentItem,
@@ -238,9 +238,8 @@ export async function sendInfoflowPrivateMessage(params: {
   toUser: string;
   contents: InfoflowMessageContentItem[];
   timeoutMs?: number;
-  skipSentStore?: boolean;
 }): Promise<{ ok: boolean; error?: string; invaliduser?: string; msgkey?: string }> {
-  const { account, toUser, contents, timeoutMs = DEFAULT_TIMEOUT_MS, skipSentStore } = params;
+  const { account, toUser, contents, timeoutMs = DEFAULT_TIMEOUT_MS } = params;
   const { apiHost, appKey, appSecret } = account.config;
 
   // Validate account config
@@ -373,18 +372,17 @@ export async function sendInfoflowPrivateMessage(params: {
       extractMessageId(innerData ?? {});
     if (msgkey) {
       recordSentMessageId(msgkey);
-      if (!skipSentStore) {
-        try {
-          recordSentMessage(account.accountId, {
-            target: toUser,
-            messageid: msgkey,
-            msgseqid: "",
-            digest: buildMessageDigest(contents),
-            sentAt: Date.now(),
-          });
-        } catch {
-          // Do not block sending
-        }
+      try {
+        recordSentMessage(account.accountId, {
+          target: toUser,
+          from: buildAgentFrom(account.config.appAgentId),
+          messageid: msgkey,
+          msgseqid: "",
+          digest: buildMessageDigest(contents),
+          sentAt: Date.now(),
+        });
+      } catch {
+        // Do not block sending
       }
     }
 
@@ -414,9 +412,8 @@ export async function sendInfoflowGroupMessage(params: {
   contents: InfoflowMessageContentItem[];
   replyTo?: InfoflowOutboundReply;
   timeoutMs?: number;
-  skipSentStore?: boolean;
 }): Promise<{ ok: boolean; error?: string; messageid?: string; msgseqid?: string }> {
-  const { account, groupId, contents, timeoutMs = DEFAULT_TIMEOUT_MS, skipSentStore } = params;
+  const { account, groupId, contents, timeoutMs = DEFAULT_TIMEOUT_MS } = params;
   const { apiHost, appKey, appSecret } = account.config;
 
   // Validate account config
@@ -580,10 +577,11 @@ export async function sendInfoflowGroupMessage(params: {
     result: { messageid?: string; msgseqid?: string },
     digestContents: InfoflowMessageContentItem[],
   ) => {
-    if (skipSentStore || !result.messageid) return;
+    if (!result.messageid) return;
     try {
       recordSentMessage(account.accountId, {
         target: `group:${groupId}`,
+        from: buildAgentFrom(account.config.appAgentId),
         messageid: result.messageid,
         msgseqid: result.msgseqid ?? "",
         digest: buildMessageDigest(digestContents),
@@ -777,7 +775,7 @@ export async function recallInfoflowPrivateMessage(params: {
 
     const bodyStr = JSON.stringify({ msgkey, agentid: appAgentId });
 
-    logVerbose(`[infoflow:recallPrivate] POST body: ${bodyStr}`);
+    logVerbose(`[infoflow:recallPrivate] POST auth: ${tokenResult.token} body: ${bodyStr}`);
 
     const res = await fetch(`${ensureHttps(apiHost)}${INFOFLOW_PRIVATE_RECALL_PATH}`, {
       method: "POST",
@@ -893,7 +891,6 @@ export async function sendInfoflowMessage(params: {
   contents: InfoflowMessageContentItem[];
   accountId?: string;
   replyTo?: InfoflowOutboundReply;
-  skipSentStore?: boolean;
 }): Promise<{ ok: boolean; error?: string; messageId?: string; msgseqid?: string }> {
   const { cfg, to, contents, accountId } = params;
 
@@ -926,7 +923,6 @@ export async function sendInfoflowMessage(params: {
       groupId,
       contents: resolvedContents,
       replyTo: params.replyTo,
-      skipSentStore: params.skipSentStore,
     });
     return {
       ok: result.ok,
@@ -949,7 +945,6 @@ export async function sendInfoflowMessage(params: {
       account,
       toUser: target,
       contents: nonImageContents,
-      skipSentStore: params.skipSentStore,
     });
     if (result.ok) {
       lastMessageId = result.msgkey;

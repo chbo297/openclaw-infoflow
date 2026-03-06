@@ -61,9 +61,9 @@ function isDuplicateMessage(msgData: Record<string, unknown>): boolean {
  * Called after successfully sending a message to prevent
  * the bot from processing its own outbound messages as inbound.
  */
-export function recordSentMessageId(messageId: string | number): void {
+export function recordSentMessageId(messageId: string | null): void {
   if (messageId == null) return;
-  messageCache.check(String(messageId)); // Will record if not duplicate
+  messageCache.check(messageId);
 }
 
 // ---------------------------------------------------------------------------

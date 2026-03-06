@@ -16,7 +16,6 @@ import {
   resolveInfoflowAccount,
 } from "./accounts.js";
 import { infoflowMessageActions } from "./actions.js";
-import { recallPendingThinkingIndicators } from "./bot.js";
 import { logVerbose } from "./logging.js";
 import { prepareInfoflowImageBase64, sendInfoflowImageMessage } from "./media.js";
 import { startInfoflowMonitor } from "./monitor.js";
@@ -53,6 +52,7 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
   agentPrompt: {
     messageToolHints: () => [
       'Infoflow group @mentions: set atAll=true to @all members, or mentionUserIds="user1,user2" (comma-separated uuapName) to @mention specific users. Only effective for group targets (group:<id>).',
+      'Infoflow supports message recall (撤回): use action="delete" to recall the most recent message, or specify messageId to recall a specific message. Works for both private and group messages.',
     ],
   },
   config: {
@@ -211,8 +211,6 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
     chunker: (text, limit) => getInfoflowRuntime().channel.text.chunkText(text, limit),
     sendText: async ({ cfg, to, text, accountId }) => {
       logVerbose(`[infoflow:sendText] to=${to}, accountId=${accountId}`);
-      // Fire recall concurrently — don't block reply delivery
-      void recallPendingThinkingIndicators({ cfg, to });
       // Use "markdown" type even though param is named `text`: LLM outputs are often markdown,
       // and Infoflow's markdown type handles both plain text and markdown seamlessly.
       const result = await sendInfoflowMessage({
@@ -228,8 +226,6 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
     },
     sendMedia: async ({ cfg, to, text, mediaUrl, accountId, mediaLocalRoots }) => {
       logVerbose(`[infoflow:sendMedia] to=${to}, accountId=${accountId}, mediaUrl=${mediaUrl}`);
-      // Fire recall concurrently — don't block reply delivery
-      void recallPendingThinkingIndicators({ cfg, to });
 
       const trimmedText = text?.trim();
 
