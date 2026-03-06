@@ -318,6 +318,7 @@ async function sendThinkingIndicator(params: {
       contents: [{ type: "text", content: "收到🤔..." }],
       accountId,
       replyTo,
+      skipSentStore: true, // Thinking indicator is ephemeral; don't persist to SQLite
     });
     if (result.ok && result.messageId) {
       logVerbose(
@@ -383,6 +384,50 @@ async function recallThinkingIndicator(params: {
   } catch (err) {
     logVerbose(`[infoflow] thinking indicator recall exception: ${formatInfoflowError(err)}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Pending thinking indicator store (module-level)
+//
+// Tracks thinking indicators that need to be recalled before the next outbound
+// message to the same target. This bridges the gap when a message is enqueued
+// by queue policy — the handle survives across the handleInfoflowMessage →
+// followup-runner → outbound.sendText boundary.
+// ---------------------------------------------------------------------------
+
+type PendingThinkingEntry = {
+  handle: ThinkingIndicatorHandle;
+  accountId: string;
+  groupId?: number;
+  isPrivate: boolean;
+};
+
+/** key = outbound target (e.g. "group:123" or "username") */
+const pendingThinkingHandles = new Map<string, PendingThinkingEntry[]>();
+
+/**
+ * Recalls all pending thinking indicators for the given target.
+ * Called by outbound.sendText/sendMedia before delivering a reply.
+ */
+export async function recallPendingThinkingIndicators(params: {
+  cfg: OpenClawConfig;
+  to: string;
+}): Promise<void> {
+  const entries = pendingThinkingHandles.get(params.to);
+  if (!entries || entries.length === 0) return;
+  // Remove first to prevent concurrent duplicate recalls
+  pendingThinkingHandles.delete(params.to);
+  await Promise.all(
+    entries.map((entry) =>
+      recallThinkingIndicator({
+        cfg: params.cfg,
+        accountId: entry.accountId,
+        handle: entry.handle,
+        groupId: entry.groupId,
+        isPrivate: entry.isPrivate,
+      }),
+    ),
+  );
 }
 
 /**
@@ -899,6 +944,19 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
           ? { messageid: event.messageId, preview: mes.slice(0, 100) }
           : undefined,
     });
+    // Register in pending map so outbound.sendText can recall it when the
+    // followup runner delivers the reply (enqueue path).
+    if (thinkingHandle) {
+      const entry: PendingThinkingEntry = {
+        handle: thinkingHandle,
+        accountId: account.accountId,
+        groupId: isGroup ? groupId : undefined,
+        isPrivate: !isGroup,
+      };
+      const existing = pendingThinkingHandles.get(to) ?? [];
+      existing.push(entry);
+      pendingThinkingHandles.set(to, existing);
+    }
   }
 
   // Provide mention context to the LLM so it can decide who to @mention
@@ -936,6 +994,13 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
   const doRecallThinking = async () => {
     if (thinkingRecalled || !canRecallThinking) return;
     thinkingRecalled = true;
+    // Remove our handle from the pending map (prevent double-recall via outbound.sendText)
+    const entries = pendingThinkingHandles.get(to);
+    if (entries) {
+      const idx = entries.findIndex((e) => e.handle === thinkingHandle);
+      if (idx !== -1) entries.splice(idx, 1);
+      if (entries.length === 0) pendingThinkingHandles.delete(to);
+    }
     await recallThinkingIndicator({
       cfg,
       accountId: account.accountId,
@@ -949,7 +1014,8 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
   const wrappedDispatcherOptions = {
     ...dispatcherOptions,
     deliver: async (payload: ReplyPayload) => {
-      await doRecallThinking();
+      // Fire recall concurrently — don't block reply delivery
+      void doRecallThinking();
       return originalDeliver(payload);
     },
     onCleanup: () => {
@@ -957,21 +1023,12 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     },
   };
 
-  // Wrap dispatch in try/finally to guarantee the thinking indicator bound to
-  // this message is always recalled — even when queue policy drops/enqueues the
-  // message before typing activates (typing.cleanup skips onCleanup when inactive).
-  // doRecallThinking is idempotent (thinkingRecalled flag), so duplicate calls are no-ops.
-  let dispatchResult;
-  try {
-    dispatchResult = await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-      ctx: ctxPayload,
-      cfg,
-      dispatcherOptions: wrappedDispatcherOptions,
-      replyOptions,
-    });
-  } finally {
-    await doRecallThinking();
-  }
+  const dispatchResult = await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+    ctx: ctxPayload,
+    cfg,
+    dispatcherOptions: wrappedDispatcherOptions,
+    replyOptions,
+  });
 
   const didReply = dispatchResult?.queuedFinal ?? false;
 

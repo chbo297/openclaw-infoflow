@@ -238,8 +238,9 @@ export async function sendInfoflowPrivateMessage(params: {
   toUser: string;
   contents: InfoflowMessageContentItem[];
   timeoutMs?: number;
+  skipSentStore?: boolean;
 }): Promise<{ ok: boolean; error?: string; invaliduser?: string; msgkey?: string }> {
-  const { account, toUser, contents, timeoutMs = DEFAULT_TIMEOUT_MS } = params;
+  const { account, toUser, contents, timeoutMs = DEFAULT_TIMEOUT_MS, skipSentStore } = params;
   const { apiHost, appKey, appSecret } = account.config;
 
   // Validate account config
@@ -372,16 +373,18 @@ export async function sendInfoflowPrivateMessage(params: {
       extractMessageId(innerData ?? {});
     if (msgkey) {
       recordSentMessageId(msgkey);
-      try {
-        recordSentMessage(account.accountId, {
-          target: toUser,
-          messageid: msgkey,
-          msgseqid: "",
-          digest: buildMessageDigest(contents),
-          sentAt: Date.now(),
-        });
-      } catch {
-        // Do not block sending
+      if (!skipSentStore) {
+        try {
+          recordSentMessage(account.accountId, {
+            target: toUser,
+            messageid: msgkey,
+            msgseqid: "",
+            digest: buildMessageDigest(contents),
+            sentAt: Date.now(),
+          });
+        } catch {
+          // Do not block sending
+        }
       }
     }
 
@@ -411,8 +414,9 @@ export async function sendInfoflowGroupMessage(params: {
   contents: InfoflowMessageContentItem[];
   replyTo?: InfoflowOutboundReply;
   timeoutMs?: number;
+  skipSentStore?: boolean;
 }): Promise<{ ok: boolean; error?: string; messageid?: string; msgseqid?: string }> {
-  const { account, groupId, contents, timeoutMs = DEFAULT_TIMEOUT_MS } = params;
+  const { account, groupId, contents, timeoutMs = DEFAULT_TIMEOUT_MS, skipSentStore } = params;
   const { apiHost, appKey, appSecret } = account.config;
 
   // Validate account config
@@ -576,18 +580,17 @@ export async function sendInfoflowGroupMessage(params: {
     result: { messageid?: string; msgseqid?: string },
     digestContents: InfoflowMessageContentItem[],
   ) => {
-    if (result.messageid) {
-      try {
-        recordSentMessage(account.accountId, {
-          target: `group:${groupId}`,
-          messageid: result.messageid,
-          msgseqid: result.msgseqid ?? "",
-          digest: buildMessageDigest(digestContents),
-          sentAt: Date.now(),
-        });
-      } catch {
-        // Do not block sending
-      }
+    if (skipSentStore || !result.messageid) return;
+    try {
+      recordSentMessage(account.accountId, {
+        target: `group:${groupId}`,
+        messageid: result.messageid,
+        msgseqid: result.msgseqid ?? "",
+        digest: buildMessageDigest(digestContents),
+        sentAt: Date.now(),
+      });
+    } catch {
+      // Do not block sending
     }
   };
 
@@ -890,6 +893,7 @@ export async function sendInfoflowMessage(params: {
   contents: InfoflowMessageContentItem[];
   accountId?: string;
   replyTo?: InfoflowOutboundReply;
+  skipSentStore?: boolean;
 }): Promise<{ ok: boolean; error?: string; messageId?: string; msgseqid?: string }> {
   const { cfg, to, contents, accountId } = params;
 
@@ -922,6 +926,7 @@ export async function sendInfoflowMessage(params: {
       groupId,
       contents: resolvedContents,
       replyTo: params.replyTo,
+      skipSentStore: params.skipSentStore,
     });
     return {
       ok: result.ok,
@@ -944,6 +949,7 @@ export async function sendInfoflowMessage(params: {
       account,
       toUser: target,
       contents: nonImageContents,
+      skipSentStore: params.skipSentStore,
     });
     if (result.ok) {
       lastMessageId = result.msgkey;
