@@ -103,6 +103,15 @@ function checkWatchMentioned(
   return undefined;
 }
 
+/** Check if message content matches the configured watchRegex regex pattern */
+function checkWatchRegex(mes: string, pattern: string): boolean {
+  try {
+    return new RegExp(pattern, "i").test(mes);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Extract non-bot mention IDs from inbound group message body items.
  * Returns human userIds and robot agentIds (excluding the bot itself, matched by robotName).
@@ -195,6 +204,19 @@ function buildWatchMentionPrompt(mentionedId: string): string {
 }
 
 /**
+ * Build a GroupSystemPrompt for watch-content triggered messages.
+ * Instructs the agent to reply only when confident, otherwise use NO_REPLY.
+ */
+function buildWatchRegexPrompt(pattern: string): string {
+  return [
+    `The message content matched the configured watch pattern (${pattern}).`,
+    "As the group assistant, you observed this message. Decide whether you can provide help or a valuable reply.",
+    "",
+    buildReplyJudgmentRules(),
+  ].join("\n");
+}
+
+/**
  * Build a GroupSystemPrompt for follow-up replies after bot's last response.
  * Instructs the agent to reply only if the message is a follow-up on the same topic.
  */
@@ -253,6 +275,7 @@ type ResolvedGroupConfig = {
   followUp: boolean;
   followUpWindow: number;
   watchMentions: string[];
+  watchRegex?: string;
   systemPrompt?: string;
 };
 
@@ -277,6 +300,7 @@ function resolveGroupConfig(
     followUp: groupCfg?.followUp ?? account.config.followUp ?? true,
     followUpWindow: groupCfg?.followUpWindow ?? account.config.followUpWindow ?? 300,
     watchMentions: groupCfg?.watchMentions ?? account.config.watchMentions ?? [],
+    watchRegex: groupCfg?.watchRegex ?? account.config.watchRegex,
     systemPrompt: groupCfg?.systemPrompt,
   };
 }
@@ -676,6 +700,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
 
   // Reply mode gating for group messages
   // Session is already recorded above for context history
+  let triggerReason = "direct-message";
   if (isGroup && groupCfg) {
     const { replyMode } = groupCfg;
     const groupIdStr = groupId !== undefined ? String(groupId) : undefined;
@@ -683,6 +708,9 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     // "record" mode: save to session only, no think, no reply
     if (replyMode === "record") {
       if (groupIdStr) {
+        logVerbose(
+          `[infoflow:bot] pending: from=${fromuser}, group=${groupId}, reason=record-mode`,
+        );
         recordPendingHistoryEntryIfEnabled({
           historyMap: chatHistories,
           historyKey: groupIdStr,
@@ -699,16 +727,22 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     if (replyMode === "mention-only") {
       // Only reply if bot was @mentioned
       const shouldReply = canDetectMention && wasMentioned;
-      if (!shouldReply) {
+      if (shouldReply) {
+        triggerReason = "bot-mentioned";
+      } else {
         // Check follow-up window: if bot recently replied, allow LLM to decide
         if (
           groupCfg.followUp &&
           groupIdStr &&
           isWithinFollowUpWindow(groupIdStr, groupCfg.followUpWindow)
         ) {
+          triggerReason = "followUp";
           ctxPayload.GroupSystemPrompt = buildFollowUpPrompt();
         } else {
           if (groupIdStr) {
+            logVerbose(
+              `[infoflow:bot] pending: from=${fromuser}, group=${groupId}, reason=mention-only-not-mentioned`,
+            );
             recordPendingHistoryEntryIfEnabled({
               historyMap: chatHistories,
               historyKey: groupIdStr,
@@ -722,7 +756,9 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     } else if (replyMode === "mention-and-watch") {
       // Reply if bot @mentioned, or if watched person @mentioned, or follow-up
       const botMentioned = canDetectMention && wasMentioned;
-      if (!botMentioned) {
+      if (botMentioned) {
+        triggerReason = "bot-mentioned";
+      } else {
         // Check watch-mention
         const watchMentions = groupCfg.watchMentions;
         const matchedWatchId =
@@ -731,17 +767,26 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
             : undefined;
 
         if (matchedWatchId) {
+          triggerReason = `watchMentions(${matchedWatchId})`;
           // Watch-mention triggered: instruct agent to reply only if confident
           ctxPayload.GroupSystemPrompt = buildWatchMentionPrompt(matchedWatchId);
+        } else if (groupCfg.watchRegex && checkWatchRegex(mes, groupCfg.watchRegex)) {
+          triggerReason = `watchRegex(${groupCfg.watchRegex})`;
+          // Watch-content triggered: message matched configured regex pattern
+          ctxPayload.GroupSystemPrompt = buildWatchRegexPrompt(groupCfg.watchRegex);
         } else if (
           groupCfg.followUp &&
           groupIdStr &&
           isWithinFollowUpWindow(groupIdStr, groupCfg.followUpWindow)
         ) {
+          triggerReason = "followUp";
           // Follow-up window: let LLM decide if this is a follow-up
           ctxPayload.GroupSystemPrompt = buildFollowUpPrompt();
         } else {
           if (groupIdStr) {
+            logVerbose(
+              `[infoflow:bot] pending: from=${fromuser}, group=${groupId}, reason=mention-and-watch-no-trigger`,
+            );
             recordPendingHistoryEntryIfEnabled({
               historyMap: chatHistories,
               historyKey: groupIdStr,
@@ -755,7 +800,9 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     } else if (replyMode === "proactive") {
       // Always think and potentially reply
       const botMentioned = canDetectMention && wasMentioned;
-      if (!botMentioned) {
+      if (botMentioned) {
+        triggerReason = "bot-mentioned";
+      } else {
         // Check watch-mention first (higher priority prompt)
         const watchMentions = groupCfg.watchMentions;
         const matchedWatchId =
@@ -763,8 +810,10 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
             ? checkWatchMentioned(event.bodyItems, watchMentions)
             : undefined;
         if (matchedWatchId) {
+          triggerReason = `watchMentions(${matchedWatchId})`;
           ctxPayload.GroupSystemPrompt = buildWatchMentionPrompt(matchedWatchId);
         } else {
+          triggerReason = "proactive";
           ctxPayload.GroupSystemPrompt = buildProactivePrompt();
         }
       }
@@ -795,6 +844,10 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
       ctxPayload.Body += `\n\n[System: @mentioned in group: ${parts.join("; ")}. To @mention someone in your reply, use the @id format]`;
     }
   }
+
+  logVerbose(
+    `[infoflow:bot] dispatching to LLM: from=${fromuser}, group=${groupId ?? "N/A"}, trigger=${triggerReason}, replyMode=${groupCfg?.replyMode ?? "N/A"}`,
+  );
 
   const { dispatcherOptions, replyOptions } = createInfoflowReplyDispatcher({
     cfg,

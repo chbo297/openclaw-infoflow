@@ -30,7 +30,7 @@
       "followUp": { "type": "boolean", "default": true },
       "followUpWindow": { "type": "number", "default": 300 },
       "watchMentions": { "type": "array", "items": { "type": "string" } },
-      "thinkingIndicator": { "type": "boolean", "default": true },
+      "watchRegex": { "type": "string" },
       "groups": {
         "type": "object",
         "additionalProperties": {
@@ -41,10 +41,10 @@
               "enum": ["ignore", "record", "mention-only", "mention-and-watch", "proactive"]
             },
             "watchMentions": { "type": "array", "items": { "type": "string" } },
+            "watchRegex": { "type": "string" },
             "followUp": { "type": "boolean" },
             "followUpWindow": { "type": "number" },
-            "systemPrompt": { "type": "string" },
-            "thinkingIndicator": { "type": "boolean" }
+            "systemPrompt": { "type": "string" }
           },
           "additionalProperties": false
         }
@@ -77,7 +77,7 @@
             "followUp": { "type": "boolean" },
             "followUpWindow": { "type": "number" },
             "watchMentions": { "type": "array", "items": { "type": "string" } },
-            "thinkingIndicator": { "type": "boolean" },
+            "watchRegex": { "type": "string" },
             "groups": {
               "type": "object",
               "additionalProperties": {
@@ -88,10 +88,10 @@
                     "enum": ["ignore", "record", "mention-only", "mention-and-watch", "proactive"]
                   },
                   "watchMentions": { "type": "array", "items": { "type": "string" } },
+                  "watchRegex": { "type": "string" },
                   "followUp": { "type": "boolean" },
                   "followUpWindow": { "type": "number" },
-                  "systemPrompt": { "type": "string" },
-                  "thinkingIndicator": { "type": "boolean" }
+                  "systemPrompt": { "type": "string" }
                 },
                 "additionalProperties": false
               }
