@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026.3.8
+
+### 新功能
+
+#### watchRegex（正则匹配群消息）
+
+- 支持 `watchRegex` 配置：按正则表达式匹配群内聊天内容，命中时触发机器人参与并回复
+- 可在顶层、账号级别或按群（`groups.<groupId>.watchRegex`）单独配置
+- 需配合 `replyMode` 为 `mention-and-watch` 或 `proactive` 使用
+
+#### 撤回消息
+
+- 支持私聊消息撤回能力，需在配置中填写如流企业后台的 `appAgentId`（应用 ID）
+
+### Bug 修复
+
+- 修复了一些消息回复失败的问题
+
+---
+
 ## 2026.2.28
 
 ### 新功能

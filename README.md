@@ -13,6 +13,7 @@
 - **私聊 & 群聊**消息接收与回复
 - 群内 **@机器人** 检测，被 @提及 时自动回复
 - **watchMentions（关注提及）**：监控指定人员被 @ 时，机器人作为其助手判断是否代为回复
+- **watchRegex（正则匹配）**：按正则匹配群内聊天内容，命中时触发机器人回复
 - **followUp（跟进回复）**：机器人回复后，在时间窗口内智能判断后续消息是否为追问，无需再次 @
 - 五种 **replyMode（回复模式）**：从完全忽略到主动参与，灵活控制群内行为
 - **按群独立配置**：每个群可设置不同的回复策略和系统提示词
@@ -49,7 +50,7 @@ openclaw plugins install ./path/to/openclaw-infoflow
       encodingAESKey: "your-encoding-aes-key",
       appKey: "your-app-key",
       appSecret: "your-app-secret",
-      robotName: "MyBot", // 必填：用于群内 @提及 检测
+      robotName: "MyBot", // 用于群内 @提及 检测
     },
   },
 }
@@ -99,6 +100,27 @@ https://your-domain/webhook/infoflow
 - 如果有把握 → 直接回复
 - 如果无法帮助 → 静默不回复
 
+## 正则匹配 (watchRegex)
+
+通过正则表达式匹配群内聊天内容，当消息文本命中正则时，会触发机器人参与并回复（需配合 `replyMode` 为 `mention-and-watch` 或 `proactive`）。可在顶层、账号或按群单独配置。
+
+```json5
+{
+  channels: {
+    infoflow: {
+      watchRegex: "^(帮忙|请帮我|求助)",  // 顶层：匹配以这些词开头的消息
+      groups: {
+        "123456": {
+          watchRegex: "\\?$|怎么|如何",   // 该群：匹配以问号结尾或含「怎么」「如何」的消息
+        },
+      },
+    },
+  },
+}
+```
+
+**说明**：正则采用 JavaScript 标准语法；与 watchMentions、@提及 等条件并列，任一满足即可触发回复判断。
+
 ## 跟进回复 (followUp)
 
 机器人回复后，在 `followUpWindow` 时间窗口内（默认 300 秒），后续消息即使没有 @机器人 也会触发智能判断：
@@ -130,6 +152,7 @@ https://your-domain/webhook/infoflow
         "123456": {
           replyMode: "mention-and-watch",
           watchMentions: ["team-lead01"],
+          watchRegex: "^(帮忙|求助)",
           followUp: true,
           followUpWindow: 600,
           systemPrompt: "你是这个项目组的技术助手。",
@@ -206,10 +229,12 @@ https://your-domain/webhook/infoflow
 | `appKey` | `string` | — | 应用 Key **（必填）** |
 | `appSecret` | `string` | — | 应用 Secret **（必填）** |
 | `robotName` | `string` | — | 机器人名称，用于 @提及 检测 |
+| `appAgentId` | `number` | — | 如流企业后台的应用 ID，私聊消息撤回依赖此字段 |
 | `replyMode` | `string` | `"mention-and-watch"` | 回复模式 |
 | `followUp` | `boolean` | `true` | 是否启用跟进回复 |
 | `followUpWindow` | `number` | `300` | 跟进窗口（秒） |
 | `watchMentions` | `string[]` | `[]` | 关注提及的人员列表 |
+| `watchRegex` | `string` | — | 正则表达式，匹配群消息内容时触发回复 |
 | `dmPolicy` | `string` | `"open"` | 私聊策略 |
 | `allowFrom` | `string[]` | `[]` | 私聊白名单 |
 | `groupPolicy` | `string` | `"open"` | 群聊策略 |
@@ -224,6 +249,7 @@ https://your-domain/webhook/infoflow
 |------|------|------|
 | `replyMode` | `string` | 覆盖该群的回复模式 |
 | `watchMentions` | `string[]` | 覆盖该群的关注列表 |
+| `watchRegex` | `string` | 覆盖该群的正则匹配规则，匹配群消息内容时触发回复 |
 | `followUp` | `boolean` | 覆盖该群的跟进开关 |
 | `followUpWindow` | `number` | 覆盖该群的跟进窗口 |
 | `systemPrompt` | `string` | 该群专属系统提示词 |
@@ -257,6 +283,7 @@ Baidu Infoflow (如流) enterprise messaging platform — OpenClaw channel plugi
 - **Direct & group** message receiving and replying
 - **@mention detection** in groups — auto-reply when the bot is @mentioned
 - **watchMentions**: monitor specified people; when they are @mentioned, the bot acts as their assistant and decides whether to reply on their behalf
+- **watchRegex**: match group chat content by regex; when a message matches, trigger the bot to reply
 - **followUp**: after the bot replies, intelligently judge whether subsequent messages are follow-up questions within a time window — no need to @mention again
 - Five **replyMode** levels: from fully ignoring to proactively engaging, flexibly control group behavior
 - **Per-group config**: each group can have its own reply strategy and system prompt
@@ -343,6 +370,27 @@ Configure a list of people to watch. When someone in the group @mentions a perso
 - Confident it can help → replies directly
 - Cannot help → stays silent (NO_REPLY)
 
+## Regex Match (watchRegex)
+
+Match group chat content with a regular expression; when a message matches, the bot is triggered to participate and reply (requires `replyMode` `mention-and-watch` or `proactive`). Can be set at top level, per account, or per group.
+
+```json5
+{
+  channels: {
+    infoflow: {
+      watchRegex: "^(help|please|urgent)",  // Top-level: match messages starting with these
+      groups: {
+        "123456": {
+          watchRegex: "\\?$|how to|what is",  // This group: match messages ending with ? or containing "how to"/"what is"
+        },
+      },
+    },
+  },
+}
+```
+
+**Note**: Regex uses standard JavaScript syntax. It works alongside watchMentions and @mention; any condition can trigger reply evaluation.
+
 ## Follow-Up (followUp)
 
 After the bot replies, any subsequent message within the `followUpWindow` (default 300 seconds) triggers intelligent judgment — even without @mentioning the bot:
@@ -374,6 +422,7 @@ Set independent reply strategies for each group, overriding the global defaults.
         "123456": {
           replyMode: "mention-and-watch",
           watchMentions: ["team-lead01"],
+          watchRegex: "^(help|urgent)",
           followUp: true,
           followUpWindow: 600,
           systemPrompt: "You are the tech assistant for this project team.",
@@ -450,10 +499,12 @@ Set independent reply strategies for each group, overriding the global defaults.
 | `appKey` | `string` | — | Application key **(required)** |
 | `appSecret` | `string` | — | Application secret **(required)** |
 | `robotName` | `string` | — | Bot name for @mention detection |
+| `appAgentId` | `number` | — | Infoflow app ID (enterprise console); required for DM message recall |
 | `replyMode` | `string` | `"mention-and-watch"` | Reply mode |
 | `followUp` | `boolean` | `true` | Enable follow-up replies |
 | `followUpWindow` | `number` | `300` | Follow-up window (seconds) |
 | `watchMentions` | `string[]` | `[]` | List of people to watch for @mentions |
+| `watchRegex` | `string` | — | Regex to match group message content; when matched, trigger reply |
 | `dmPolicy` | `string` | `"open"` | DM access policy |
 | `allowFrom` | `string[]` | `[]` | DM allowlist |
 | `groupPolicy` | `string` | `"open"` | Group access policy |
@@ -468,6 +519,7 @@ Set independent reply strategies for each group, overriding the global defaults.
 |-------|------|-------------|
 | `replyMode` | `string` | Override reply mode for this group |
 | `watchMentions` | `string[]` | Override watch list for this group |
+| `watchRegex` | `string` | Override regex for this group; match group content to trigger reply |
 | `followUp` | `boolean` | Override follow-up toggle for this group |
 | `followUpWindow` | `number` | Override follow-up window for this group |
 | `systemPrompt` | `string` | Custom system prompt for this group |
