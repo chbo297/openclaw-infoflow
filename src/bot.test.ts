@@ -3,6 +3,7 @@ import {
   _checkBotMentioned as checkBotMentioned,
   _checkWatchMentioned as checkWatchMentioned,
   _extractMentionIds as extractMentionIds,
+  _checkWatchRegex as checkWatchRegex,
 } from "./bot.js";
 
 describe("checkBotMentioned", () => {
@@ -256,5 +257,18 @@ describe("extractMentionIds", () => {
       userIds: [],
       agentIds: [],
     });
+  });
+});
+
+describe("checkWatchRegex", () => {
+  it("matches multi-line content with dotAll pattern", () => {
+    const text = "iphone crash 报警 异常\ntestrisk=3";
+    const pattern = "^(?=.*iphone)(?=.*crash)(?=.*异常).*$";
+    expect(checkWatchRegex(text, pattern)).toBe(true);
+  });
+
+  it("returns false when pattern is invalid", () => {
+    // An invalid regex should not throw and should return false.
+    expect(checkWatchRegex("test", "[")).toBe(false);
   });
 });

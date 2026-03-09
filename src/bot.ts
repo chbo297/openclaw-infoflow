@@ -373,11 +373,15 @@ export async function handlePrivateChatMessage(params: HandlePrivateChatParams):
 export async function handleGroupChatMessage(params: HandleGroupChatParams): Promise<void> {
   const { cfg, msgData, accountId, statusSink } = params;
 
-  // Extract sender from nested structure or flat fields
+  // Extract sender from nested structure or flat fields.
+  // Some Infoflow events (including bot-authored forwards) only populate `fromid` on the root,
+  // so include msgData.fromid as a final fallback.
   const header = (msgData.message as Record<string, unknown>)?.header as
     | Record<string, unknown>
     | undefined;
-  const fromuser = String(header?.fromuserid ?? msgData.fromuserid ?? msgData.from ?? "");
+  const fromuser = String(
+    header?.fromuserid ?? msgData.fromuserid ?? msgData.from ?? msgData.fromid ?? "",
+  );
 
   // Extract message ID (priority: header.messageid > header.msgid > MsgId)
   const messageId = header?.messageid ?? header?.msgid ?? msgData.MsgId;
@@ -426,7 +430,7 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
         if (replyBody) {
           replyContextItems.push(replyBody);
         }
-      } else if (item.type === "TEXT") {
+      } else if (item.type === "TEXT" || item.type === "MD") {
         textContent += item.content ?? "";
         rawTextContent += item.content ?? "";
       } else if (item.type === "LINK") {
@@ -447,6 +451,10 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
         if (typeof url === "string" && url.trim()) {
           imageUrls.push(url.trim());
         }
+      } else if (typeof item.content === "string" && item.content.trim()) {
+        // Fallback: for any other item types with string content, treat content as text.
+        textContent += item.content;
+        rawTextContent += item.content;
       }
     }
   }
@@ -904,3 +912,6 @@ export const _checkWatchMentioned = checkWatchMentioned;
 
 /** @internal — Extract non-bot mention IDs. Only exported for tests. */
 export const _extractMentionIds = extractMentionIds;
+
+/** @internal — Check watchRegex against message content (dotAll). Only exported for tests. */
+export const _checkWatchRegex = checkWatchRegex;
