@@ -103,10 +103,10 @@ function checkWatchMentioned(
   return undefined;
 }
 
-/** Check if message content matches the configured watchRegex regex pattern */
+/** Check if message content matches the configured watchRegex regex pattern. Uses "s" (dotAll) so that . matches newlines in multi-line messages. */
 function checkWatchRegex(mes: string, pattern: string): boolean {
   try {
-    return new RegExp(pattern, "i").test(mes);
+    return new RegExp(pattern, "is").test(mes);
   } catch {
     return false;
   }

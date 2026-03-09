@@ -207,7 +207,7 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
   outbound: {
     deliveryMode: "direct",
     chunkerMode: "markdown",
-    textChunkLimit: 4000,
+    textChunkLimit: 2048,
     chunker: (text, limit) => getInfoflowRuntime().channel.text.chunkText(text, limit),
     sendText: async ({ cfg, to, text, accountId }) => {
       logVerbose(`[infoflow:sendText] to=${to}, accountId=${accountId}`);

@@ -148,8 +148,8 @@ export function createInfoflowReplyDispatcher(params: CreateInfoflowReplyDispatc
         messageText = atPrefix + text;
       }
 
-      // Chunk text to 4000 chars max (Infoflow limit)
-      const chunks = core.channel.text.chunkText(messageText, 4000);
+      // Chunk text to 2048 chars max (Infoflow limit)
+      const chunks = core.channel.text.chunkText(messageText, 2048);
       // Only include @mentions in the first chunk (avoid duplicate @s)
       let isFirstChunk = true;
 
