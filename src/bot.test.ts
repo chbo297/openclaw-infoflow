@@ -1,9 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+const mockFindSentMessage = vi.hoisted(() => vi.fn());
+vi.mock("./sent-message-store.js", () => ({
+  findSentMessage: mockFindSentMessage,
+}));
+
 import {
   _checkBotMentioned as checkBotMentioned,
   _checkWatchMentioned as checkWatchMentioned,
   _extractMentionIds as extractMentionIds,
   _checkWatchRegex as checkWatchRegex,
+  _checkReplyToBot as checkReplyToBot,
 } from "./bot.js";
 
 describe("checkBotMentioned", () => {
@@ -264,11 +271,114 @@ describe("checkWatchRegex", () => {
   it("matches multi-line content with dotAll pattern", () => {
     const text = "iphone crash 报警 异常\ntestrisk=3";
     const pattern = "^(?=.*iphone)(?=.*crash)(?=.*异常).*$";
-    expect(checkWatchRegex(text, pattern)).toBe(true);
+    expect(checkWatchRegex(text, [pattern])).toBe(true);
+  });
+
+  it("returns true when any of multiple patterns matches", () => {
+    const text = "hello world";
+    expect(checkWatchRegex(text, ["nomatch", "world", "other"])).toBe(true);
+    expect(checkWatchRegex(text, ["nomatch", "other"])).toBe(false);
   });
 
   it("returns false when pattern is invalid", () => {
-    // An invalid regex should not throw and should return false.
-    expect(checkWatchRegex("test", "[")).toBe(false);
+    // Invalid regex is skipped; no match.
+    expect(checkWatchRegex("test", ["["])).toBe(false);
+  });
+
+  it("returns false for empty patterns", () => {
+    expect(checkWatchRegex("anything", [])).toBe(false);
+  });
+});
+
+describe("checkReplyToBot", () => {
+  it("returns false when body has no replyData items", () => {
+    mockFindSentMessage.mockReset();
+    const bodyItems = [
+      { type: "TEXT", content: "hello" },
+      { type: "AT", name: "Bot" },
+    ];
+    expect(checkReplyToBot(bodyItems, "acct1")).toBe(false);
+    expect(mockFindSentMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns false when replyData has no messageid", () => {
+    mockFindSentMessage.mockReset();
+    const bodyItems = [{ type: "replyData", content: "some quoted text" }];
+    expect(checkReplyToBot(bodyItems, "acct1")).toBe(false);
+    expect(mockFindSentMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns true when replyData messageid matches a sent message", () => {
+    mockFindSentMessage.mockReset();
+    mockFindSentMessage.mockReturnValue({
+      target: "group:123",
+      from: "agent:100",
+      messageid: "999",
+      msgseqid: "",
+      digest: "hello",
+      sentAt: Date.now(),
+    });
+    const bodyItems = [{ type: "replyData", content: "quoted", messageid: "999" }];
+    expect(checkReplyToBot(bodyItems, "acct1")).toBe(true);
+    expect(mockFindSentMessage).toHaveBeenCalledWith("acct1", "999");
+  });
+
+  it("returns false when replyData messageid is not found in sent store", () => {
+    mockFindSentMessage.mockReset();
+    mockFindSentMessage.mockReturnValue(undefined);
+    const bodyItems = [{ type: "replyData", content: "quoted", messageid: "888" }];
+    expect(checkReplyToBot(bodyItems, "acct1")).toBe(false);
+    expect(mockFindSentMessage).toHaveBeenCalledWith("acct1", "888");
+  });
+
+  it("handles numeric messageid by converting to string", () => {
+    mockFindSentMessage.mockReset();
+    mockFindSentMessage.mockReturnValue({
+      target: "group:123",
+      from: "agent:100",
+      messageid: "7654321",
+      msgseqid: "",
+      digest: "test",
+      sentAt: Date.now(),
+    });
+    const bodyItems = [{ type: "replyData", content: "quoted", messageid: 7654321 }];
+    expect(checkReplyToBot(bodyItems, "acct1")).toBe(true);
+    expect(mockFindSentMessage).toHaveBeenCalledWith("acct1", "7654321");
+  });
+
+  it("returns true if any replyData item matches (multiple quotes)", () => {
+    mockFindSentMessage.mockReset();
+    mockFindSentMessage.mockImplementation((_acct: string, id: string) => {
+      if (id === "222") {
+        return {
+          target: "group:1",
+          from: "agent:1",
+          messageid: "222",
+          msgseqid: "",
+          digest: "",
+          sentAt: 0,
+        };
+      }
+      return undefined;
+    });
+    const bodyItems = [
+      { type: "replyData", content: "not bot", messageid: "111" },
+      { type: "replyData", content: "bot msg", messageid: "222" },
+    ];
+    expect(checkReplyToBot(bodyItems, "acct1")).toBe(true);
+  });
+
+  it("returns false gracefully when findSentMessage throws", () => {
+    mockFindSentMessage.mockReset();
+    mockFindSentMessage.mockImplementation(() => {
+      throw new Error("DB error");
+    });
+    const bodyItems = [{ type: "replyData", content: "quoted", messageid: "123" }];
+    expect(checkReplyToBot(bodyItems, "acct1")).toBe(false);
+  });
+
+  it("returns false when body is empty", () => {
+    mockFindSentMessage.mockReset();
+    expect(checkReplyToBot([], "acct1")).toBe(false);
   });
 });

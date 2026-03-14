@@ -71,7 +71,7 @@ function mergeInfoflowAccountConfig(
   robotName?: string;
   requireMention?: boolean;
   watchMentions?: string[];
-  watchRegex?: string;
+  watchRegex?: string | string[];
   appAgentId?: number;
 } {
   const raw = getChannelSection(cfg) ?? {};
@@ -88,9 +88,14 @@ function mergeInfoflowAccountConfig(
     robotName?: string;
     requireMention?: boolean;
     watchMentions?: string[];
-    watchRegex?: string;
+    watchRegex?: string | string[];
     appAgentId?: number;
   };
+}
+
+function normalizeWatchRegex(v: string | string[] | undefined): string[] {
+  if (v == null) return [];
+  return Array.isArray(v) ? v : [v];
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +138,7 @@ export function resolveInfoflowAccount(params: {
       robotName: merged.robotName?.trim() || undefined,
       requireMention: merged.requireMention,
       watchMentions: merged.watchMentions,
-      watchRegex: merged.watchRegex,
+      watchRegex: normalizeWatchRegex(merged.watchRegex),
       appAgentId: merged.appAgentId,
     },
   };

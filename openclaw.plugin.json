@@ -30,7 +30,7 @@
       "followUp": { "type": "boolean", "default": true },
       "followUpWindow": { "type": "number", "default": 300 },
       "watchMentions": { "type": "array", "items": { "type": "string" } },
-      "watchRegex": { "type": "string" },
+      "watchRegex": { "type": "array", "items": { "type": "string" } },
       "groups": {
         "type": "object",
         "additionalProperties": {
@@ -41,7 +41,7 @@
               "enum": ["ignore", "record", "mention-only", "mention-and-watch", "proactive"]
             },
             "watchMentions": { "type": "array", "items": { "type": "string" } },
-            "watchRegex": { "type": "string" },
+            "watchRegex": { "type": "array", "items": { "type": "string" } },
             "followUp": { "type": "boolean" },
             "followUpWindow": { "type": "number" },
             "systemPrompt": { "type": "string" }
@@ -77,7 +77,7 @@
             "followUp": { "type": "boolean" },
             "followUpWindow": { "type": "number" },
             "watchMentions": { "type": "array", "items": { "type": "string" } },
-            "watchRegex": { "type": "string" },
+            "watchRegex": { "type": "array", "items": { "type": "string" } },
             "groups": {
               "type": "object",
               "additionalProperties": {
@@ -88,7 +88,7 @@
                     "enum": ["ignore", "record", "mention-only", "mention-and-watch", "proactive"]
                   },
                   "watchMentions": { "type": "array", "items": { "type": "string" } },
-                  "watchRegex": { "type": "string" },
+                  "watchRegex": { "type": "array", "items": { "type": "string" } },
                   "followUp": { "type": "boolean" },
                   "followUpWindow": { "type": "number" },
                   "systemPrompt": { "type": "string" }

@@ -183,7 +183,7 @@ describe("prepareInfoflowImageBase64", () => {
     expect(result).toEqual({ isImage: false });
   });
 
-  it("passes mediaLocalRoots to loadWebMedia", async () => {
+  it("passes file parent dir as localRoots for local path so any path is allowed (infoflow-only)", async () => {
     const imgBuffer = Buffer.from("local-image");
     loadWebMediaMock.mockResolvedValue({
       buffer: imgBuffer,
@@ -194,12 +194,31 @@ describe("prepareInfoflowImageBase64", () => {
 
     await prepareInfoflowImageBase64({
       mediaUrl: "/allowed/path/img.png",
-      mediaLocalRoots: ["/allowed/path"],
     });
 
     expect(loadWebMediaMock).toHaveBeenCalledWith(
       "/allowed/path/img.png",
       expect.objectContaining({ localRoots: ["/allowed/path"] }),
+    );
+  });
+
+  it("uses file parent dir for local path even when mediaLocalRoots is provided", async () => {
+    const imgBuffer = Buffer.from("local-image");
+    loadWebMediaMock.mockResolvedValue({
+      buffer: imgBuffer,
+      contentType: "image/png",
+      fileName: "local.png",
+    });
+    mediaKindFromMimeMock.mockReturnValue("image");
+
+    await prepareInfoflowImageBase64({
+      mediaUrl: "/other/img.png",
+      mediaLocalRoots: ["/allowed/path"],
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "/other/img.png",
+      expect.objectContaining({ localRoots: ["/other"] }),
     );
   });
 });

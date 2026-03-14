@@ -2,6 +2,8 @@
  * Infoflow native image sending: compress, base64-encode, and POST via Infoflow API.
  */
 
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveInfoflowAccount } from "./accounts.js";
 import { recordSentMessageId } from "./infoflow-req-parse.js";
@@ -90,8 +92,21 @@ export async function compressImageForInfoflow(params: {
 
 export type PrepareImageResult = { isImage: true; base64: string } | { isImage: false };
 
+function isLocalMediaUrl(url: string): boolean {
+  const t = url.trim();
+  return (
+    t.startsWith("file://") ||
+    t.startsWith("/") ||
+    t.startsWith("./") ||
+    t.startsWith("../") ||
+    t.startsWith("~")
+  );
+}
+
 /**
  * Downloads media, checks if it's an image, compresses to 1MB, and base64-encodes.
+ * For local paths, passes the file's parent directory as localRoots so any path is allowed
+ * (infoflow-only; does not change shared media layer).
  */
 export async function prepareInfoflowImageBase64(params: {
   mediaUrl: string;
@@ -100,11 +115,32 @@ export async function prepareInfoflowImageBase64(params: {
   const { mediaUrl, mediaLocalRoots } = params;
   const runtime = getInfoflowRuntime();
 
-  // Download media
+  let localRoots: readonly string[] | undefined;
+  if (isLocalMediaUrl(mediaUrl)) {
+    let absPath: string;
+    if (mediaUrl.trim().startsWith("file://")) {
+      try {
+        absPath = fileURLToPath(mediaUrl.trim());
+      } catch {
+        absPath = path.resolve(mediaUrl.replace(/^file:\/\//i, ""));
+      }
+    } else {
+      absPath = path.resolve(mediaUrl.trim());
+    }
+    const dir = path.dirname(absPath);
+    if (dir && dir !== path.parse(dir).root) {
+      localRoots = [dir];
+    } else {
+      localRoots = mediaLocalRoots?.length ? [...mediaLocalRoots] : undefined;
+    }
+  } else {
+    localRoots = mediaLocalRoots?.length ? [...mediaLocalRoots] : undefined;
+  }
+
   const loaded = await runtime.media.loadWebMedia(mediaUrl, {
     maxBytes: 30 * 1024 * 1024, // 30MB download limit
     optimizeImages: false,
-    localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
+    localRoots: localRoots ?? undefined,
   });
 
   // Check if it's an image

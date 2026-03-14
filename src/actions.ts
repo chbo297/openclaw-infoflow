@@ -372,54 +372,56 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
         `[infoflow:action:send] to=${to}, atAll=${atAll}, mentionUserIds=${mentionUserIdsRaw ?? "none"}`,
       );
 
-      // Send text+mentions first (if any)
-      if (contents.length > 0) {
-        await sendInfoflowMessage({
-          cfg,
-          to,
-          contents,
-          accountId: accountId ?? undefined,
-          replyTo,
-        });
-      }
-
-      // Try native image send, fallback to link
+      // b-mode: fire text first (if any), then image/link, then await all
+      const p1 =
+        contents.length > 0
+          ? sendInfoflowMessage({
+              cfg,
+              to,
+              contents,
+              accountId: accountId ?? undefined,
+              replyTo,
+            })
+          : null;
+      let p2: Promise<{ ok: boolean; messageId?: string; error?: string }>;
       try {
         const prepared = await prepareInfoflowImageBase64({ mediaUrl });
         if (prepared.isImage) {
-          const imgResult = await sendInfoflowImageMessage({
+          p2 = sendInfoflowImageMessage({
             cfg,
             to,
             base64Image: prepared.base64,
             accountId: accountId ?? undefined,
             replyTo: contents.length > 0 ? undefined : replyTo,
           });
-          return jsonResult({
-            ok: imgResult.ok,
-            channel: "infoflow",
+        } else {
+          p2 = sendInfoflowMessage({
+            cfg,
             to,
-            messageId: imgResult.messageId ?? (imgResult.ok ? "sent" : "failed"),
-            ...(imgResult.error ? { error: imgResult.error } : {}),
+            contents: [{ type: "link", content: mediaUrl }],
+            accountId: accountId ?? undefined,
+            replyTo: contents.length > 0 ? undefined : replyTo,
           });
         }
       } catch {
-        // fallback to link below
+        p2 = sendInfoflowMessage({
+          cfg,
+          to,
+          contents: [{ type: "link", content: mediaUrl }],
+          accountId: accountId ?? undefined,
+          replyTo: contents.length > 0 ? undefined : replyTo,
+        });
       }
-
-      // Non-image or native send failed → send as link
-      const linkResult = await sendInfoflowMessage({
-        cfg,
-        to,
-        contents: [{ type: "link", content: mediaUrl }],
-        accountId: accountId ?? undefined,
-        replyTo: contents.length > 0 ? undefined : replyTo,
-      });
+      const results = await Promise.all([p1, p2].filter(Boolean));
+      const last = results.at(-1) as
+        | { ok: boolean; messageId?: string; error?: string }
+        | undefined;
       return jsonResult({
-        ok: linkResult.ok,
+        ok: last?.ok ?? false,
         channel: "infoflow",
         to,
-        messageId: linkResult.messageId ?? (linkResult.ok ? "sent" : "failed"),
-        ...(linkResult.error ? { error: linkResult.error } : {}),
+        messageId: last?.messageId ?? (last?.ok ? "sent" : "failed"),
+        ...(last?.error ? { error: last.error } : {}),
       });
     }
 

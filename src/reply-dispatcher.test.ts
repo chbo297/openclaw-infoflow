@@ -242,6 +242,43 @@ describe("createInfoflowReplyDispatcher", () => {
     });
   });
 
+  it("deliver sends local image path as native image instead of markdown", async () => {
+    mockPrepareInfoflowImageBase64.mockResolvedValue({
+      isImage: true,
+      base64: "base64fake",
+    });
+
+    const { dispatcherOptions } = createInfoflowReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent-1",
+      accountId: "acc-1",
+      to: "chengbo05",
+    });
+
+    await dispatcherOptions.deliver({ text: "file:///tmp/family_login3.png" });
+
+    expect(mockPrepareInfoflowImageBase64).toHaveBeenCalledWith({
+      mediaUrl: "file:///tmp/family_login3.png",
+      mediaLocalRoots: undefined,
+    });
+    expect(mockSendInfoflowImageMessage).toHaveBeenCalledWith({
+      cfg: {},
+      to: "chengbo05",
+      base64Image: "base64fake",
+      accountId: "acc-1",
+    });
+    const markdownCalls = mockSendInfoflowMessage.mock.calls.filter((call) =>
+      call[0].contents.some((c: { type: string }) => c.type === "markdown"),
+    );
+    const sentAsMarkdown = markdownCalls.some((call) =>
+      call[0].contents.some(
+        (c: { type: string; content?: string }) =>
+          c.type === "markdown" && c.content?.includes("file:///tmp/family_login3.png"),
+      ),
+    );
+    expect(sentAsMarkdown).toBe(false);
+  });
+
   it("onError logs error via send logger", () => {
     const { dispatcherOptions } = createInfoflowReplyDispatcher({
       cfg: {} as never,

@@ -22,7 +22,7 @@ export type InfoflowReplyMode =
 export type InfoflowGroupConfig = {
   replyMode?: InfoflowReplyMode;
   watchMentions?: string[];
-  watchRegex?: string;
+  watchRegex?: string[];
   followUp?: boolean;
   followUpWindow?: number;
   systemPrompt?: string;
@@ -45,6 +45,8 @@ export type InfoflowInboundBodyItem = {
   userid?: string;
   /** IMAGE 类型 body item 的图片下载地址 */
   downloadurl?: string;
+  /** replyData 类型 body item 中被引用消息的 ID */
+  messageid?: string | number;
 };
 
 /** Mention IDs extracted from inbound group AT items (excluding the bot itself) */
@@ -114,7 +116,7 @@ export type InfoflowAccountConfig = {
    *  the bot analyzes the message and replies only if confident. */
   watchMentions?: string[];
   /** Regex pattern to watch for in message content; triggers bot activation when matched */
-  watchRegex?: string;
+  watchRegex?: string[];
   /** Reply mode controlling bot engagement level in groups */
   replyMode?: InfoflowReplyMode;
   /** Enable follow-up replies after bot responds to a mention (default: true) */
@@ -153,7 +155,7 @@ export type ResolvedInfoflowAccount = {
      *  the bot analyzes the message and replies only if confident. */
     watchMentions?: string[];
     /** Regex pattern to watch for in message content; triggers bot activation when matched */
-    watchRegex?: string;
+    watchRegex?: string[];
     /** Reply mode controlling bot engagement level in groups */
     replyMode?: InfoflowReplyMode;
     /** Enable follow-up replies after bot responds to a mention (default: true) */
@@ -191,6 +193,8 @@ export type InfoflowMessageEvent = {
   mentionIds?: InfoflowMentionIds;
   /** Reply/quote context extracted from replyData body items (supports multiple quotes) */
   replyContext?: string[];
+  /** Whether the message is a reply (引用回复) to one of the bot's own messages */
+  isReplyToBot?: boolean;
   /** Image download URLs extracted from IMAGE body items (group) or PicUrl (private) */
   imageUrls?: string[];
 };
