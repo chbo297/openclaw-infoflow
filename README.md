@@ -19,6 +19,7 @@
 - **按群独立配置**：每个群可设置不同的回复策略和系统提示词
 - **多账号支持**：一个实例管理多个如流机器人
 - **Agent 主动/定时发送**：LLM Agent 可主动或定时发送私聊消息、往群里发消息，支持 @指定用户或 @全员
+- **Markdown 本地图片**：回复内容中的本地图片路径会自动转为图片消息发送
 
 ## 安装
 
@@ -102,16 +103,16 @@ https://your-domain/webhook/infoflow
 
 ## 正则匹配 (watchRegex)
 
-通过正则表达式匹配群内聊天内容，当消息文本命中正则时，会触发机器人参与并回复（需配合 `replyMode` 为 `mention-and-watch` 或 `proactive`）。可在顶层、账号或按群单独配置。
+通过正则表达式匹配群内聊天内容，当消息文本命中任一正则时，会触发机器人参与并回复（需配合 `replyMode` 为 `mention-and-watch` 或 `proactive`）。`watchRegex` 可配置为**字符串**或**字符串数组**（多条正则，命中其一即触发）。可在顶层、账号或按群单独配置。
 
 ```json5
 {
   channels: {
     infoflow: {
-      watchRegex: "^(帮忙|请帮我|求助)",  // 顶层：匹配以这些词开头的消息
+      watchRegex: ["^(帮忙|请帮我)", "\\?$"],  // 顶层：数组形式，多条正则
       groups: {
         "123456": {
-          watchRegex: "\\?$|怎么|如何",   // 该群：匹配以问号结尾或含「怎么」「如何」的消息
+          watchRegex: "\\?$|怎么|如何",   // 该群：单条正则，匹配以问号结尾或含「怎么」「如何」的消息
         },
       },
     },
@@ -234,7 +235,7 @@ https://your-domain/webhook/infoflow
 | `followUp` | `boolean` | `true` | 是否启用跟进回复 |
 | `followUpWindow` | `number` | `300` | 跟进窗口（秒） |
 | `watchMentions` | `string[]` | `[]` | 关注提及的人员列表 |
-| `watchRegex` | `string` | — | 正则表达式，匹配群消息内容时触发回复 |
+| `watchRegex` | `string` \| `string[]` | — | 正则或正则数组，匹配群消息内容时触发回复 |
 | `dmPolicy` | `string` | `"open"` | 私聊策略 |
 | `allowFrom` | `string[]` | `[]` | 私聊白名单 |
 | `groupPolicy` | `string` | `"open"` | 群聊策略 |
@@ -249,7 +250,7 @@ https://your-domain/webhook/infoflow
 |------|------|------|
 | `replyMode` | `string` | 覆盖该群的回复模式 |
 | `watchMentions` | `string[]` | 覆盖该群的关注列表 |
-| `watchRegex` | `string` | 覆盖该群的正则匹配规则，匹配群消息内容时触发回复 |
+| `watchRegex` | `string` \| `string[]` | 覆盖该群的正则匹配规则（可为单条或数组），匹配群消息内容时触发回复 |
 | `followUp` | `boolean` | 覆盖该群的跟进开关 |
 | `followUpWindow` | `number` | 覆盖该群的跟进窗口 |
 | `systemPrompt` | `string` | 该群专属系统提示词 |
@@ -289,6 +290,7 @@ Baidu Infoflow (如流) enterprise messaging platform — OpenClaw channel plugi
 - **Per-group config**: each group can have its own reply strategy and system prompt
 - **Multi-account support**: manage multiple Infoflow bots from a single instance
 - **Agent-initiated / scheduled sending**: LLM Agent can proactively or on a schedule send DMs, post messages to groups, @specific users, or @all members
+- **Markdown local images**: local image paths in reply content are converted and sent as image messages
 
 ## Install
 
@@ -372,16 +374,16 @@ Configure a list of people to watch. When someone in the group @mentions a perso
 
 ## Regex Match (watchRegex)
 
-Match group chat content with a regular expression; when a message matches, the bot is triggered to participate and reply (requires `replyMode` `mention-and-watch` or `proactive`). Can be set at top level, per account, or per group.
+Match group chat content with a regular expression; when a message matches any pattern, the bot is triggered to participate and reply (requires `replyMode` `mention-and-watch` or `proactive`). `watchRegex` can be a **string** or **string array** (multiple patterns; any match triggers). Can be set at top level, per account, or per group.
 
 ```json5
 {
   channels: {
     infoflow: {
-      watchRegex: "^(help|please|urgent)",  // Top-level: match messages starting with these
+      watchRegex: ["^(help|please)", "\\?$"],  // Top-level: array of patterns
       groups: {
         "123456": {
-          watchRegex: "\\?$|how to|what is",  // This group: match messages ending with ? or containing "how to"/"what is"
+          watchRegex: "\\?$|how to|what is",  // This group: single pattern
         },
       },
     },
@@ -504,7 +506,7 @@ Set independent reply strategies for each group, overriding the global defaults.
 | `followUp` | `boolean` | `true` | Enable follow-up replies |
 | `followUpWindow` | `number` | `300` | Follow-up window (seconds) |
 | `watchMentions` | `string[]` | `[]` | List of people to watch for @mentions |
-| `watchRegex` | `string` | — | Regex to match group message content; when matched, trigger reply |
+| `watchRegex` | `string` \| `string[]` | — | Regex or array of regexes; when matched, trigger reply |
 | `dmPolicy` | `string` | `"open"` | DM access policy |
 | `allowFrom` | `string[]` | `[]` | DM allowlist |
 | `groupPolicy` | `string` | `"open"` | Group access policy |
@@ -519,7 +521,7 @@ Set independent reply strategies for each group, overriding the global defaults.
 |-------|------|-------------|
 | `replyMode` | `string` | Override reply mode for this group |
 | `watchMentions` | `string[]` | Override watch list for this group |
-| `watchRegex` | `string` | Override regex for this group; match group content to trigger reply |
+| `watchRegex` | `string` \| `string[]` | Override regex for this group (single or array); match group content to trigger reply |
 | `followUp` | `boolean` | Override follow-up toggle for this group |
 | `followUpWindow` | `number` | Override follow-up window for this group |
 | `systemPrompt` | `string` | Custom system prompt for this group |
