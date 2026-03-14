@@ -6,7 +6,7 @@ import {
   recordPendingHistoryEntryIfEnabled,
   buildAgentMediaPayload,
 } from "openclaw/plugin-sdk";
-import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/mattermost";
 import { resolveInfoflowAccount } from "./accounts.js";
 import { getInfoflowBotLog, formatInfoflowError, logVerbose } from "./logging.js";
 import { createInfoflowReplyDispatcher } from "./reply-dispatcher.js";
