@@ -191,6 +191,8 @@ export type InfoflowMessageEvent = {
   timestamp?: number;
   /** Raw message text preserving @mentions (for RawBody) */
   rawMes?: string;
+  /** Message text for the LLM including @mentions and robotid (BodyForAgent) */
+  bodyForAgent?: string;
   /** Raw body items from group message (for watch-mention detection) */
   bodyItems?: InfoflowInboundBodyItem[];
   /** Non-bot mention IDs extracted from AT items in group messages (excluding bot itself) */

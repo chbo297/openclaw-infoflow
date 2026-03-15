@@ -194,6 +194,38 @@ function hasOtherMentions(mentionIds?: InfoflowMentionIds): boolean {
   return mentionIds.userIds.length > 0 || mentionIds.agentIds.length > 0;
 }
 
+/**
+ * When in follow-up window and message has other @mentions (not this bot): record only and
+ * return "record_only" (no LLM dispatch). Otherwise return "dispatch".
+ */
+function resolveFollowUpOtherMentioned(params: {
+  mentionIds: InfoflowMentionIds | undefined;
+  groupId: number | undefined;
+  bodyForAgent: string;
+  senderName: string;
+  fromuser: string;
+}): "record_only" | "dispatch" {
+  const { mentionIds, groupId, bodyForAgent, senderName, fromuser } = params;
+  if (!hasOtherMentions(mentionIds)) return "dispatch";
+  const groupIdStr = groupId != null ? String(groupId) : undefined;
+  if (groupIdStr) {
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: chatHistories,
+      historyKey: groupIdStr,
+      entry: {
+        sender: senderName || fromuser,
+        body: bodyForAgent,
+        timestamp: Date.now(),
+      },
+      limit: DEFAULT_GROUP_HISTORY_LIMIT,
+    });
+  }
+  logVerbose(
+    `[infoflow:bot] skip dispatch: from=${fromuser}, group=${groupId}, reason=followUp-other-mentioned (record only, no LLM)`,
+  );
+  return "record_only";
+}
+
 // ---------------------------------------------------------------------------
 // Reply-to-bot detection (引用回复机器人消息)
 // ---------------------------------------------------------------------------
@@ -345,18 +377,6 @@ function buildFollowUpPrompt(isReplyToBot: boolean): string {
   );
 
   return lines.join("\n");
-}
-
-/**
- * Build a GroupSystemPrompt for follow-up messages that @mention another person or bot.
- * Uses the conservative ReplyJudgmentRules since the message is likely directed at someone else.
- */
-function buildFollowUpOtherMentionedPrompt(): string {
-  return [
-    "You recently replied in this group. A new message has arrived, but it @mentions another person or bot — it is likely directed at them, not at you.",
-    "",
-    buildReplyJudgmentRules(),
-  ].join("\n");
 }
 
 /**
@@ -585,9 +605,11 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
   // Extract non-bot mention IDs (userIds + agentIds) for LLM-driven @mentions
   const mentionIds = extractMentionIds(bodyItems, robotName);
 
-  // Build two versions: mes (for CommandBody, no @xxx) and rawMes (for RawBody, with @xxx)
+  // Build three versions: mes (for CommandBody, no @xxx), rawMes (for RawBody, with @xxx),
+  // and bodyForAgent (for LLM: @name with robotid when present so model sees "@地图不打烊 (robotid:N)")
   let textContent = "";
   let rawTextContent = "";
+  let agentVisibleText = "";
   const replyContextItems: string[] = [];
   const imageUrls: string[] = [];
   if (Array.isArray(bodyItems)) {
@@ -601,17 +623,21 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
       } else if (item.type === "TEXT" || item.type === "MD") {
         textContent += item.content ?? "";
         rawTextContent += item.content ?? "";
+        agentVisibleText += item.content ?? "";
       } else if (item.type === "LINK") {
         const label = item.label ?? "";
         if (label) {
           textContent += ` ${label} `;
           rawTextContent += ` ${label} `;
+          agentVisibleText += ` ${label} `;
         }
       } else if (item.type === "AT") {
-        // AT elements only go into rawTextContent, not textContent
+        // AT elements only go into rawTextContent and agentVisibleText, not textContent
         const name = item.name ?? "";
         if (name) {
           rawTextContent += `@${name} `;
+          agentVisibleText +=
+            item.robotid != null ? `@${name} (robotid:${item.robotid}) ` : `@${name} `;
         }
       } else if (item.type === "IMAGE") {
         // 提取图片下载地址
@@ -623,6 +649,7 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
         // Fallback: for any other item types with string content, treat content as text.
         textContent += item.content;
         rawTextContent += item.content;
+        agentVisibleText += item.content;
       }
     }
   }
@@ -643,6 +670,8 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
   if (!mes && replyContext) {
     mes = "(引用回复)";
   }
+  // Body for LLM: include @mentions with robotid so model sees e.g. "@地图不打烊 (robotid:N)"
+  const bodyForAgent = agentVisibleText.trim() || rawMes || mes;
 
   // Extract sender name from header or fallback to fromuser
   const senderName = String(header?.username ?? header?.nickname ?? msgData.username ?? fromuser);
@@ -657,6 +686,7 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
       fromuser,
       mes,
       rawMes,
+      bodyForAgent,
       chatType: "group",
       groupId: groupid,
       senderName,
@@ -682,6 +712,8 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
 export async function handleInfoflowMessage(params: HandleInfoflowMessageParams): Promise<void> {
   const { cfg, event, accountId, statusSink } = params;
   const { fromuser, mes, chatType, groupId, senderName } = event;
+  // Single source for "body shown to LLM": already computed in group handler (line ~666)
+  const bodyForAgent = event.bodyForAgent ?? mes;
 
   const account = resolveInfoflowAccount({ cfg, accountId });
   const core = getInfoflowRuntime();
@@ -729,7 +761,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     timestamp: Date.now(),
     previousTimestamp,
     envelope: envelopeOptions,
-    body: mes,
+    body: bodyForAgent,
   });
 
   // Inject accumulated group chat history into the body for context
@@ -844,6 +876,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     Body: combinedBody,
     RawBody: event.rawMes ?? mes,
     CommandBody: mes,
+    BodyForAgent: bodyForAgent,
     From: fromAddress,
     To: toAddress,
     SessionKey: route.sessionKey,
@@ -865,6 +898,14 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     CommandAuthorized: true,
     ...mediaPayload,
   });
+
+  // Ensure BodyForAgent stays set for group messages (with @ and robotid) so the LLM sees full context
+  if (isGroup && bodyForAgent !== mes) {
+    (ctxPayload as Record<string, unknown>).BodyForAgent = bodyForAgent;
+    logVerbose(
+      `[infoflow] group: BodyForAgent set for LLM (${bodyForAgent.length} chars, includes @/robotid)`,
+    );
+  }
 
   // Record session using recordInboundSession for proper session tracking
   await core.channel.session.recordInboundSession({
@@ -894,7 +935,11 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
         recordPendingHistoryEntryIfEnabled({
           historyMap: chatHistories,
           historyKey: groupIdStr,
-          entry: { sender: senderName || fromuser, body: mes, timestamp: Date.now() },
+          entry: {
+            sender: senderName || fromuser,
+            body: bodyForAgent,
+            timestamp: Date.now(),
+          },
           limit: DEFAULT_GROUP_HISTORY_LIMIT,
         });
       }
@@ -917,8 +962,17 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
           isWithinFollowUpWindow(groupIdStr, groupCfg.followUpWindow)
         ) {
           if (hasOtherMentions(event.mentionIds)) {
-            triggerReason = "followUp-other-mentioned";
-            ctxPayload.GroupSystemPrompt = buildFollowUpOtherMentionedPrompt();
+            if (
+              resolveFollowUpOtherMentioned({
+                mentionIds: event.mentionIds,
+                groupId,
+                bodyForAgent,
+                senderName: senderName || fromuser,
+                fromuser,
+              }) === "record_only"
+            ) {
+              return;
+            }
           } else {
             triggerReason = "followUp";
             ctxPayload.GroupSystemPrompt = buildFollowUpPrompt(event.isReplyToBot === true);
@@ -931,7 +985,11 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
             recordPendingHistoryEntryIfEnabled({
               historyMap: chatHistories,
               historyKey: groupIdStr,
-              entry: { sender: senderName || fromuser, body: mes, timestamp: Date.now() },
+              entry: {
+                sender: senderName || fromuser,
+                body: bodyForAgent,
+                timestamp: Date.now(),
+              },
               limit: DEFAULT_GROUP_HISTORY_LIMIT,
             });
           }
@@ -969,8 +1027,17 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
           isWithinFollowUpWindow(groupIdStr, groupCfg.followUpWindow)
         ) {
           if (hasOtherMentions(event.mentionIds)) {
-            triggerReason = "followUp-other-mentioned";
-            ctxPayload.GroupSystemPrompt = buildFollowUpOtherMentionedPrompt();
+            if (
+              resolveFollowUpOtherMentioned({
+                mentionIds: event.mentionIds,
+                groupId,
+                bodyForAgent,
+                senderName: senderName || fromuser,
+                fromuser,
+              }) === "record_only"
+            ) {
+              return;
+            }
           } else {
             triggerReason = "followUp";
             ctxPayload.GroupSystemPrompt = buildFollowUpPrompt(event.isReplyToBot === true);
@@ -983,7 +1050,11 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
             recordPendingHistoryEntryIfEnabled({
               historyMap: chatHistories,
               historyKey: groupIdStr,
-              entry: { sender: senderName || fromuser, body: mes, timestamp: Date.now() },
+              entry: {
+                sender: senderName || fromuser,
+                body: bodyForAgent,
+                timestamp: Date.now(),
+              },
               limit: DEFAULT_GROUP_HISTORY_LIMIT,
             });
           }
@@ -1038,8 +1109,22 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     }
   }
 
+  const mentionIdsLog =
+    isGroup && event.mentionIds
+      ? `, mentionIds={userIds:[${event.mentionIds.userIds.join(",")}], agentIds:[${event.mentionIds.agentIds.join(",")}]}`
+      : "";
+  const bodyPreview =
+    (ctxPayload as Record<string, unknown>).Body != null
+      ? String((ctxPayload as Record<string, unknown>).Body)
+      : "";
+  const bodyLog = `bodyLen=${bodyPreview.length} bodyPreview=${bodyPreview.length > 5000 ? bodyPreview.slice(0, 5000) + "..." : bodyPreview}`;
+  const sysPrompt =
+    (ctxPayload as Record<string, unknown>).GroupSystemPrompt != null
+      ? String((ctxPayload as Record<string, unknown>).GroupSystemPrompt)
+      : "";
+  const sysPromptLog = `groupSystemPromptLen=${sysPrompt.length} groupSystemPromptPreview=${sysPrompt.length > 5000 ? sysPrompt.slice(0, 5000) + "..." : sysPrompt}`;
   logVerbose(
-    `[infoflow:bot] dispatching to LLM: from=${fromuser}, group=${groupId ?? "N/A"}, trigger=${triggerReason}, replyMode=${groupCfg?.replyMode ?? "N/A"}`,
+    `[infoflow:bot] dispatching to LLM: from=${fromuser}, group=${groupId ?? "N/A"}, trigger=${triggerReason}, replyMode=${groupCfg?.replyMode ?? "N/A"}${mentionIdsLog} | ${bodyLog} | ${sysPromptLog}`,
   );
 
   const { dispatcherOptions, replyOptions } = createInfoflowReplyDispatcher({
@@ -1054,7 +1139,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     mentionIds: isGroup ? event.mentionIds : undefined,
     // Pass inbound messageId for outbound reply-to (group only)
     replyToMessageId: isGroup ? event.messageId : undefined,
-    replyToPreview: isGroup ? mes : undefined,
+    replyToPreview: isGroup ? bodyForAgent : undefined,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, route.agentId),
   });
 
