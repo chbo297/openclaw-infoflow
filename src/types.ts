@@ -112,6 +112,8 @@ export type InfoflowAccountConfig = {
   requireMention?: boolean;
   /** Robot name for matching @mentions in group messages */
   robotName?: string;
+  /** Actual robot id from Infoflow (discovered when bot is @mentioned; used to ignore own messages). Not user-configured. */
+  robotId?: string;
   /** Names to watch for @mentions; when someone @mentions a person in this list,
    *  the bot analyzes the message and replies only if confident. */
   watchMentions?: string[];
@@ -151,6 +153,8 @@ export type ResolvedInfoflowAccount = {
     requireMention?: boolean;
     /** Robot name for matching @mentions in group messages */
     robotName?: string;
+    /** Actual robot id from Infoflow (discovered when @mentioned; used to ignore own messages). */
+    robotId?: string;
     /** Names to watch for @mentions; when someone @mentions a person in this list,
      *  the bot analyzes the message and replies only if confident. */
     watchMentions?: string[];

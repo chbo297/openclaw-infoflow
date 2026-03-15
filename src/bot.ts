@@ -67,6 +67,24 @@ function checkBotMentioned(bodyItems: InfoflowBodyItem[], robotName?: string): b
 }
 
 /**
+ * When the bot is @mentioned (item.name matches robotName), return that AT item's robotid.
+ * Used to discover and persist the account's robotId from incoming group messages.
+ */
+function getBotRobotidFromBody(
+  bodyItems: InfoflowBodyItem[],
+  robotName?: string,
+): number | undefined {
+  if (!robotName) return undefined;
+  const normalizedRobotName = robotName.toLowerCase();
+  for (const item of bodyItems) {
+    if (item.type !== "AT") continue;
+    if (item.name?.toLowerCase() === normalizedRobotName && item.robotid != null)
+      return item.robotid;
+  }
+  return undefined;
+}
+
+/**
  * Check if any entry in the watchlist was @mentioned in the message body.
  * Matching priority: userid > robotid (parsed as number) > name (fallback).
  * Returns the matched ID (from watchMentions), or undefined if none matched.
@@ -483,6 +501,8 @@ export async function handlePrivateChatMessage(params: HandlePrivateChatParams):
 export async function handleGroupChatMessage(params: HandleGroupChatParams): Promise<void> {
   const { cfg, msgData, accountId, statusSink } = params;
 
+  logVerbose(`[infoflow] group chat: raw msgData: ${JSON.stringify(msgData)}`);
+
   // Extract sender from nested structure or flat fields.
   // Some Infoflow events (including bot-authored forwards) only populate `fromid` on the root,
   // so include msgData.fromid as a final fallback.
@@ -505,10 +525,6 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
   const rawTime = msgData.time ?? header?.servertime;
   const timestamp = rawTime != null ? Number(rawTime) : Date.now();
 
-  logVerbose(
-    `[infoflow] group chat: fromuser=${fromuser}, groupid=${groupid}, raw msgData: ${JSON.stringify(msgData)}`,
-  );
-
   if (!fromuser) {
     return;
   }
@@ -523,6 +539,48 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
 
   // Check if bot was @mentioned (by robotName)
   const wasMentioned = checkBotMentioned(bodyItems, robotName);
+
+  // When bot is @mentioned, discover and persist robotId from the AT item so we can ignore our own messages later.
+  let effectiveRobotId = account.config.robotId?.trim() || undefined;
+  const discoveredRobotid = getBotRobotidFromBody(bodyItems, robotName);
+  if (wasMentioned && discoveredRobotid != null) {
+    const newRobotId = String(discoveredRobotid);
+    if (newRobotId !== effectiveRobotId) {
+      try {
+        const runtime = getInfoflowRuntime();
+        const cfg = runtime.config.loadConfig();
+        const channel = (cfg.channels ?? {}) as Record<string, unknown>;
+        const infoflow = (channel.infoflow ?? {}) as Record<string, unknown>;
+        const accounts = { ...((infoflow.accounts ?? {}) as Record<string, unknown>) };
+        const accountCfg = {
+          ...((accounts[accountId] ?? {}) as Record<string, unknown>),
+          robotId: newRobotId,
+        };
+        accounts[accountId] = accountCfg;
+        (infoflow as Record<string, unknown>).accounts = accounts;
+        (channel as Record<string, unknown>).infoflow = infoflow;
+        (cfg as Record<string, unknown>).channels = channel;
+        await runtime.config.writeConfigFile(cfg);
+        logVerbose(
+          `[infoflow] group chat: persisted robotId=${newRobotId} for account ${accountId}`,
+        );
+      } catch (e) {
+        getInfoflowBotLog().warn(`[infoflow] failed to persist robotId: ${formatInfoflowError(e)}`);
+      }
+    }
+    effectiveRobotId = newRobotId;
+  }
+
+  // Ignore our own bot messages: only when robotId is set, treat fromid === robotId as own message.
+  const fromid = msgData.fromid;
+  if (effectiveRobotId != null && effectiveRobotId !== "" && fromid != null && fromid !== "") {
+    if (String(fromid) === effectiveRobotId) {
+      logVerbose(
+        `[infoflow] group chat: ignoring own bot message (fromid=${fromid}, robotId=${effectiveRobotId})`,
+      );
+      return;
+    }
+  }
 
   // Extract non-bot mention IDs (userIds + agentIds) for LLM-driven @mentions
   const mentionIds = extractMentionIds(bodyItems, robotName);
@@ -1034,6 +1092,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
 
 /** @internal — Check if bot was mentioned in message body. Only exported for tests. */
 export const _checkBotMentioned = checkBotMentioned;
+export const _getBotRobotidFromBody = getBotRobotidFromBody;
 
 /** @internal — Check if any watch-list name was @mentioned. Only exported for tests. */
 export const _checkWatchMentioned = checkWatchMentioned;

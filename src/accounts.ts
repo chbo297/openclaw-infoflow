@@ -69,6 +69,7 @@ function mergeInfoflowAccountConfig(
   enabled?: boolean;
   name?: string;
   robotName?: string;
+  robotId?: string;
   requireMention?: boolean;
   watchMentions?: string[];
   watchRegex?: string | string[];
@@ -86,6 +87,7 @@ function mergeInfoflowAccountConfig(
     enabled?: boolean;
     name?: string;
     robotName?: string;
+    robotId?: string;
     requireMention?: boolean;
     watchMentions?: string[];
     watchRegex?: string | string[];
@@ -136,6 +138,7 @@ export function resolveInfoflowAccount(params: {
       appKey,
       appSecret,
       robotName: merged.robotName?.trim() || undefined,
+      robotId: merged.robotId?.trim() || undefined,
       requireMention: merged.requireMention,
       watchMentions: merged.watchMentions,
       watchRegex: normalizeWatchRegex(merged.watchRegex),

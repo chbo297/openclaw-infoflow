@@ -13,6 +13,10 @@
       "appKey": { "type": "string" },
       "appSecret": { "type": "string" },
       "robotName": { "type": "string" },
+      "robotId": {
+        "type": "string",
+        "description": "不用填，该字段自动生成，用来兼容如流服务的某些特性，是如流机器人实际id（根据robotName在收到@时自动发现，用于忽略自己发出的消息）"
+      },
       "appAgentId": {
         "type": "number",
         "description": "如流企业后台的应用ID，私聊消息撤回依赖此字段"
@@ -61,6 +65,10 @@
             "appKey": { "type": "string" },
             "appSecret": { "type": "string" },
             "robotName": { "type": "string" },
+            "robotId": {
+              "type": "string",
+              "description": "不用填，该字段自动生成，用来兼容如流服务的某些特性，是如流机器人实际id（根据robotName在收到@时自动发现，用于忽略自己发出的消息）"
+            },
             "appAgentId": {
               "type": "number",
               "description": "如流企业后台的应用ID，私聊消息撤回依赖此字段"
