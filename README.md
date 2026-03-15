@@ -8,6 +8,8 @@
 
 百度如流 (Infoflow) 企业消息平台 — OpenClaw 频道插件。
 
+📦 **[npm](https://www.npmjs.com/package/@chbo297/infoflow)**
+
 ## 特性
 
 - **私聊 & 群聊**消息接收与回复
@@ -278,6 +280,8 @@ MIT
 # @chbo297/infoflow
 
 Baidu Infoflow (如流) enterprise messaging platform — OpenClaw channel plugin.
+
+📦 **[npm](https://www.npmjs.com/package/@chbo297/infoflow)**
 
 ## Features
 
