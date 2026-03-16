@@ -9,7 +9,7 @@ import {
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/mattermost";
 import { resolveInfoflowAccount } from "./accounts.js";
 import { getInfoflowBotLog, formatInfoflowError, logVerbose } from "./logging.js";
-import { createInfoflowReplyDispatcher } from "./reply-dispatcher.js";
+import { createInfoflowReplyDispatcherAuto } from "./reply-dispatcher.js";
 import { getInfoflowRuntime } from "./runtime.js";
 import { findSentMessage } from "./sent-message-store.js";
 import type {
@@ -1127,7 +1127,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     `[infoflow:bot] dispatching to LLM: from=${fromuser}, group=${groupId ?? "N/A"}, trigger=${triggerReason}, replyMode=${groupCfg?.replyMode ?? "N/A"}${mentionIdsLog} | ${bodyLog} | ${sysPromptLog}`,
   );
 
-  const { dispatcherOptions, replyOptions } = createInfoflowReplyDispatcher({
+  const { dispatcherOptions, replyOptions } = createInfoflowReplyDispatcherAuto({
     cfg,
     agentId: route.agentId,
     accountId: account.accountId,

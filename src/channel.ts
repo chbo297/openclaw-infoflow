@@ -20,6 +20,7 @@ import { logVerbose } from "./logging.js";
 import { parseMarkdownForLocalImages } from "./markdown-local-images.js";
 import { prepareInfoflowImageBase64, sendInfoflowImageMessage } from "./media.js";
 import { startInfoflowMonitor } from "./monitor.js";
+import { isStreamingSessionActive } from "./reply-dispatcher.js";
 import { getInfoflowRuntime } from "./runtime.js";
 import { sendInfoflowMessage } from "./send.js";
 import { normalizeInfoflowTarget, looksLikeInfoflowId } from "./targets.js";
@@ -211,6 +212,15 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
     textChunkLimit: 2048,
     chunker: (text, limit) => getInfoflowRuntime().channel.text.chunkText(text, limit),
     sendText: async ({ cfg, to, text, accountId, mediaLocalRoots, replyToId }) => {
+      // Skip if streaming card session is active for this target
+      // (streaming card handles all message delivery)
+      if (isStreamingSessionActive(to)) {
+        logVerbose(`[infoflow:sendText] skipped - streaming session active for ${to}`);
+        return {
+          channel: "infoflow",
+          messageId: "streaming",
+        };
+      }
       logVerbose(`[infoflow:sendText] to=${to}, accountId=${accountId}`);
       const isGroup = /^group:\d+$/i.test(to.replace(/^infoflow:/i, ""));
       const replyTo: InfoflowOutboundReply | undefined =
@@ -291,6 +301,15 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
       };
     },
     sendMedia: async ({ cfg, to, text, mediaUrl, accountId, mediaLocalRoots }) => {
+      // Skip if streaming card session is active for this target
+      // (streaming card handles all message delivery)
+      if (isStreamingSessionActive(to)) {
+        logVerbose(`[infoflow:sendMedia] skipped - streaming session active for ${to}`);
+        return {
+          channel: "infoflow",
+          messageId: "streaming",
+        };
+      }
       logVerbose(`[infoflow:sendMedia] to=${to}, accountId=${accountId}, mediaUrl=${mediaUrl}`);
 
       const trimmedText = text?.trim();

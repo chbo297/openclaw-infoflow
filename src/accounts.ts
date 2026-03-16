@@ -74,6 +74,7 @@ function mergeInfoflowAccountConfig(
   watchMentions?: string[];
   watchRegex?: string | string[];
   appAgentId?: number;
+  streaming?: boolean;
 } {
   const raw = getChannelSection(cfg) ?? {};
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
@@ -92,6 +93,7 @@ function mergeInfoflowAccountConfig(
     watchMentions?: string[];
     watchRegex?: string | string[];
     appAgentId?: number;
+    streaming?: boolean;
   };
 }
 
@@ -143,6 +145,7 @@ export function resolveInfoflowAccount(params: {
       watchMentions: merged.watchMentions,
       watchRegex: normalizeWatchRegex(merged.watchRegex),
       appAgentId: merged.appAgentId,
+      streaming: merged.streaming === true,
     },
   };
 }
