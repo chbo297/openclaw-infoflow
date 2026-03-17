@@ -30,8 +30,18 @@ const PREVIEW_MAX_LENGTH = 100;
 // Track active streaming card sessions by target address.
 // Used to prevent channel.outbound.sendText from sending duplicate messages
 // when streaming card mode is active.
+//
+// Using Map<string, StreamingCardSession> instead of Set<string> to:
+// 1. Provide concurrency protection for the same target
+// 2. Allow finalizing old sessions before starting new ones
 
-const activeStreamingSessions = new Set<string>();
+/** Session entry with finalize callback */
+type ActiveSessionEntry = {
+  session: StreamingCardSession | null;
+  finalize: () => Promise<unknown>;
+};
+
+const activeStreamingSessions = new Map<string, ActiveSessionEntry>();
 
 /**
  * Check if a streaming card session is active for the given target
@@ -41,11 +51,25 @@ export function isStreamingSessionActive(to: string): boolean {
 }
 
 /**
- * Mark a streaming card session as active for the given target
+ * Register a streaming session for the given target.
+ * If there's an existing session, it will be finalized first.
  * @internal
  */
-function markStreamingSessionActive(to: string): void {
-  activeStreamingSessions.add(to);
+async function registerStreamingSession(
+  to: string,
+  entry: ActiveSessionEntry,
+): Promise<void> {
+  const existing = activeStreamingSessions.get(to);
+  if (existing) {
+    // Finalize the old session before registering the new one
+    logVerbose(`[infoflow:streaming] finalizing existing session for target=${to} before starting new one`);
+    try {
+      await existing.finalize();
+    } catch (err) {
+      logVerbose(`[infoflow:streaming] error finalizing existing session: ${err}`);
+    }
+  }
+  activeStreamingSessions.set(to, entry);
 }
 
 /**
@@ -54,6 +78,17 @@ function markStreamingSessionActive(to: string): void {
  */
 function markStreamingSessionComplete(to: string): void {
   activeStreamingSessions.delete(to);
+}
+
+/**
+ * Update the session object in the active sessions map
+ * @internal
+ */
+function updateActiveSession(to: string, session: StreamingCardSession): void {
+  const entry = activeStreamingSessions.get(to);
+  if (entry) {
+    entry.session = session;
+  }
 }
 
 function truncatePreview(text?: string): string {
@@ -477,8 +512,85 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
   // 标志：流式内容是否已通过卡片发送（用于防止降级重复发送）
   let streamingContentDelivered = false;
 
-  // Mark streaming session as active immediately
-  markStreamingSessionActive(to);
+  // 重试与降级相关状态
+  const MAX_RETRY_ATTEMPTS = 2;
+  const MAX_CONSECUTIVE_FAILURES = 3;
+  const RETRY_DELAY_MS = 200;
+  let consecutiveFailures = 0;
+  let degradedToNormalSend = false;
+
+  // Trailing update 机制：确保节流跳过后最终内容能被同步
+  let trailingUpdateTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastSyncedText = ""; // 上次成功同步到卡片的文本
+
+  // 降级发送函数（流式卡片不可用时使用）
+  const fallbackSend = async (text: string) => {
+    if (!text.trim()) return;
+    logVerbose(`[infoflow:streaming] fallback send: ${text.length} chars`);
+    const chunks = core.channel.text.chunkText(text, 2048);
+    for (const chunk of chunks) {
+      await sendInfoflowMessage({
+        cfg,
+        to,
+        contents: [{ type: "markdown", content: chunk }],
+        accountId,
+      });
+    }
+    statusSink?.({ lastOutboundAt: Date.now() });
+  };
+
+  // 关闭流式会话（提前声明，用于注册）
+  // 返回: { finalized: boolean, hadContent: boolean, content: string }
+  const closeStreaming = async (): Promise<{
+    finalized: boolean;
+    hadContent: boolean;
+    content: string;
+  }> => {
+    // 清理 trailing update timer
+    if (trailingUpdateTimer) {
+      clearTimeout(trailingUpdateTimer);
+      trailingUpdateTimer = null;
+    }
+
+    if (sessionStartPromise) {
+      await sessionStartPromise;
+    }
+    await partialUpdateQueue;
+
+    const hadContent = streamText.length > 0;
+    const content = streamText;
+    let finalized = false;
+
+    if (session && !session.finalized) {
+      const result = await finalizeStreamingSession(session, streamText);
+      if (result.ok) {
+        finalized = true;
+      } else {
+        getInfoflowSendLog().error(`[infoflow:streaming] finalize failed: ${result.error}`);
+      }
+    } else if (session?.finalized) {
+      // 已经 finalized
+      finalized = true;
+    } else {
+      // session 从未创建成功
+      finalized = false;
+    }
+
+    session = null;
+    sessionStartPromise = null;
+    streamText = "";
+    lastPartial = "";
+    lastSyncedText = "";
+
+    return { finalized, hadContent, content };
+  };
+
+  // Register this session with finalize callback (will finalize any existing session first)
+  // Note: We register immediately with a null session, then update it when the session is created
+  const sessionRegistered = registerStreamingSession(to, {
+    session: null,
+    finalize: closeStreaming,
+  });
 
   // 排队流式更新
   const queueStreamingUpdate = (
@@ -497,7 +609,77 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
 
     logVerbose(`[infoflow:streaming] queueStreamingUpdate: mode=${mode}, textLength=${streamText.length}`);
 
+    // 执行实际更新的函数（用于节流和 trailing update）
+    const performUpdate = async (): Promise<boolean> => {
+      if (!session || session.finalized || degradedToNormalSend) {
+        return false;
+      }
+
+      logVerbose(`[infoflow:streaming] updating card with ${streamText.length} chars`);
+      session.currentText = streamText;
+
+      // 带重试的更新逻辑
+      let lastError: string | undefined;
+      for (let attempt = 0; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
+        if (attempt > 0) {
+          logVerbose(`[infoflow:streaming] retry attempt ${attempt}/${MAX_RETRY_ATTEMPTS}`);
+          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+        }
+
+        const result = await appendToStreamingSession(session, "");
+        if (result.ok) {
+          lastUpdateTime = Date.now();
+          lastSyncedText = streamText; // 记录已同步的文本
+          consecutiveFailures = 0;
+          statusSink?.({ lastOutboundAt: Date.now() });
+          logVerbose(`[infoflow:streaming] card updated successfully`);
+          return true;
+        }
+        lastError = result.error;
+      }
+
+      // 所有重试都失败
+      consecutiveFailures++;
+      logVerbose(`[infoflow:streaming] update failed after retries: ${lastError}, consecutiveFailures=${consecutiveFailures}`);
+
+      // 检查是否需要降级
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        logVerbose(`[infoflow:streaming] too many failures, degrading to normal send`);
+        degradedToNormalSend = true;
+        if (session) {
+          session.finalized = true;
+        }
+        markStreamingSessionComplete(to);
+      }
+      return false;
+    };
+
+    // 安排 trailing update（确保节流跳过后最终内容能被同步）
+    const scheduleTrailingUpdate = () => {
+      // 清除之前的 trailing timer
+      if (trailingUpdateTimer) {
+        clearTimeout(trailingUpdateTimer);
+      }
+      // 安排在节流间隔后执行 trailing update
+      trailingUpdateTimer = setTimeout(() => {
+        trailingUpdateTimer = null;
+        // 只有当 streamText 与 lastSyncedText 不同时才执行 trailing update
+        if (streamText !== lastSyncedText && session && !session.finalized && !degradedToNormalSend) {
+          logVerbose(`[infoflow:streaming] executing trailing update, textLength=${streamText.length}`);
+          partialUpdateQueue = partialUpdateQueue.then(async () => {
+            await performUpdate();
+          });
+        }
+      }, updateIntervalMs + 50); // 稍微延迟一点，确保节流窗口已过
+    };
+
     partialUpdateQueue = partialUpdateQueue.then(async () => {
+      // 如果已降级，跳过流式更新（最终内容会在 deliver final 时发送）
+      if (degradedToNormalSend) {
+        logVerbose(`[infoflow:streaming] skipping update: already degraded to normal send`);
+        return;
+      }
+
       if (sessionStartPromise) {
         await sessionStartPromise;
       }
@@ -505,18 +687,11 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
         const now = Date.now();
         // 节流：限制更新频率
         if (now - lastUpdateTime >= updateIntervalMs) {
-          logVerbose(`[infoflow:streaming] updating card with ${streamText.length} chars`);
-          session.currentText = streamText;
-          const result = await appendToStreamingSession(session, "");
-          if (result.ok) {
-            lastUpdateTime = now;
-            statusSink?.({ lastOutboundAt: Date.now() });
-            logVerbose(`[infoflow:streaming] card updated successfully`);
-          } else {
-            logVerbose(`[infoflow:streaming] update failed: ${result.error}`);
-          }
+          await performUpdate();
         } else {
-          logVerbose(`[infoflow:streaming] throttled, waiting ${updateIntervalMs - (now - lastUpdateTime)}ms`);
+          logVerbose(`[infoflow:streaming] throttled, scheduling trailing update`);
+          // 被节流时，安排 trailing update 确保最终一致性
+          scheduleTrailingUpdate();
         }
       } else {
         logVerbose(`[infoflow:streaming] cannot update: session=${!!session}, finalized=${session?.finalized}`);
@@ -528,6 +703,9 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
   const startStreaming = () => {
     if (sessionStartPromise || session) return;
     sessionStartPromise = (async () => {
+      // Wait for session registration to complete (which may finalize existing session)
+      await sessionRegistered;
+
       const result = await startStreamingSession({
         cfg,
         receiverId,
@@ -536,6 +714,8 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
       });
       if (result.ok && result.session) {
         session = result.session;
+        // Update the session in the active sessions map
+        updateActiveSession(to, session);
         // 标记流式卡片已创建（即使还没更新内容）
         streamingContentDelivered = true;
         logVerbose(`[infoflow:streaming] session created with modifyToken: ${session.modifyToken}`);
@@ -545,24 +725,6 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
         );
       }
     })();
-  };
-
-  // 关闭流式会话
-  const closeStreaming = async () => {
-    if (sessionStartPromise) {
-      await sessionStartPromise;
-    }
-    await partialUpdateQueue;
-    if (session && !session.finalized) {
-      const result = await finalizeStreamingSession(session, streamText);
-      if (!result.ok) {
-        getInfoflowSendLog().error(`[infoflow:streaming] finalize failed: ${result.error}`);
-      }
-    }
-    session = null;
-    sessionStartPromise = null;
-    streamText = "";
-    lastPartial = "";
   };
 
   // deliver 函数 - 判断 info.kind
@@ -592,6 +754,30 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
       // 等待流式会话创建完成（如果正在创建）
       if (sessionStartPromise) {
         await sessionStartPromise;
+      }
+
+      // 等待队列中的更新完成（确保降级状态已确定）
+      await partialUpdateQueue;
+
+      // 如果已降级到普通发送，使用 fallback 发送最终内容
+      if (degradedToNormalSend) {
+        logVerbose(`[infoflow:streaming] using fallback send due to degradation`);
+        await fallbackSend(text);
+        if (info?.kind === "final") {
+          deliveredFinalTexts.add(text);
+        }
+        // 发送媒体
+        if (hasMedia) {
+          for (const mediaUrl of mediaList) {
+            await sendInfoflowMessage({
+              cfg,
+              to,
+              contents: [{ type: "link", content: mediaUrl }],
+              accountId,
+            });
+          }
+        }
+        return;
       }
 
       // 如果流式会话已创建且未结束，通过流式卡片处理
@@ -637,15 +823,7 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
       } else {
         logVerbose(`[infoflow:streaming] fallback to normal send: session=${!!session}, finalized=${session?.finalized}`);
         markStreamingSessionComplete(to);
-        const chunks = core.channel.text.chunkText(text, 2048);
-        for (const chunk of chunks) {
-          await sendInfoflowMessage({
-            cfg,
-            to,
-            contents: [{ type: "markdown", content: chunk }],
-            accountId,
-          });
-        }
+        await fallbackSend(text);
         if (info?.kind === "final") {
           deliveredFinalTexts.add(text);
         }
@@ -666,16 +844,37 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
   };
 
   const onError = async (err: unknown) => {
-    await closeStreaming();
+    const result = await closeStreaming();
     markStreamingSessionComplete(to);
+
+    // 容错：如果 finalize 失败但有内容，发送补救消息
+    if (!result.finalized && result.hadContent) {
+      logVerbose(`[infoflow:streaming] finalize failed on error, sending fallback message`);
+      try {
+        await fallbackSend(result.content);
+      } catch (fallbackErr) {
+        logVerbose(`[infoflow:streaming] fallback send also failed: ${fallbackErr}`);
+      }
+    }
+
     getInfoflowSendLog().error(
       `[infoflow:streaming] reply error to=${to}, accountId=${accountId}: ${formatInfoflowError(err)}`,
     );
   };
 
   const onIdle = async () => {
-    await closeStreaming();
+    const result = await closeStreaming();
     markStreamingSessionComplete(to);
+
+    // 容错：如果 finalize 失败但有内容，发送补救消息
+    if (!result.finalized && result.hadContent) {
+      logVerbose(`[infoflow:streaming] finalize failed on idle, sending fallback message`);
+      try {
+        await fallbackSend(result.content);
+      } catch (fallbackErr) {
+        logVerbose(`[infoflow:streaming] fallback send also failed: ${fallbackErr}`);
+      }
+    }
   };
 
   return {
@@ -703,8 +902,18 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
     },
     // 暴露 finalize 供外部调用
     finalize: async () => {
-      await closeStreaming();
+      const result = await closeStreaming();
       markStreamingSessionComplete(to);
+
+      // 容错：如果 finalize 失败但有内容，发送补救消息
+      if (!result.finalized && result.hadContent) {
+        logVerbose(`[infoflow:streaming] finalize failed on explicit finalize, sending fallback message`);
+        try {
+          await fallbackSend(result.content);
+        } catch (fallbackErr) {
+          logVerbose(`[infoflow:streaming] fallback send also failed: ${fallbackErr}`);
+        }
+      }
     },
   };
 }
