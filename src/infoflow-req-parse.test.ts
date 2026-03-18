@@ -7,6 +7,7 @@ import {
   _decryptMessage,
   _parseXmlMessage,
   _resetMessageCache,
+  _patchPreciseIds,
   recordSentMessageId,
 } from "./infoflow-req-parse.js";
 
@@ -164,5 +165,87 @@ describe("parseXmlMessage", () => {
     expect(_parseXmlMessage("<xml><Content><![CDATA[<b>bold</b>]]></Content></xml>")).toEqual({
       Content: "<b>bold</b>",
     });
+  });
+});
+
+// ============================================================================
+// patchPreciseIds — large integer precision protection
+// ============================================================================
+
+describe("patchPreciseIds", () => {
+  // This ID exceeds Number.MAX_SAFE_INTEGER and loses precision under JSON.parse
+  const LARGE_ID = "1859713223686736431";
+  const LARGE_ID_TRUNCATED = 1859713223686736400; // what JSON.parse produces
+
+  it("patches header.messageid from truncated number to precise string", () => {
+    const rawText = `{"message":{"header":{"messageid":${LARGE_ID},"toid":123}}}`;
+    const obj = JSON.parse(rawText);
+    // Verify JSON.parse truncated the value
+    expect(obj.message.header.messageid).toBe(LARGE_ID_TRUNCATED);
+
+    _patchPreciseIds(rawText, obj);
+    expect(obj.message.header.messageid).toBe(LARGE_ID);
+  });
+
+  it("patches replyData body item messageid", () => {
+    const replyId = "1858880144601632519";
+    const rawText = `{"message":{"header":{"messageid":${LARGE_ID}},"body":[{"type":"replyData","messageid":${replyId}}]}}`;
+    const obj = JSON.parse(rawText);
+
+    _patchPreciseIds(rawText, obj);
+    expect(obj.message.header.messageid).toBe(LARGE_ID);
+    expect(obj.message.body[0].messageid).toBe(replyId);
+  });
+
+  it("does not touch small integers (< 16 digits)", () => {
+    const rawText = `{"message":{"header":{"messageid":12345}}}`;
+    const obj = JSON.parse(rawText);
+
+    _patchPreciseIds(rawText, obj);
+    expect(obj.message.header.messageid).toBe(12345); // unchanged, still number
+  });
+
+  it("patches msgid field as well", () => {
+    const rawText = `{"message":{"header":{"msgid":${LARGE_ID}}}}`;
+    const obj = JSON.parse(rawText);
+
+    _patchPreciseIds(rawText, obj);
+    expect(obj.message.header.msgid).toBe(LARGE_ID);
+  });
+
+  it("patches top-level MsgId (private message format)", () => {
+    const rawText = `{"MsgId":${LARGE_ID},"Content":"hello"}`;
+    const obj = JSON.parse(rawText);
+
+    _patchPreciseIds(rawText, obj);
+    expect(obj.MsgId).toBe(LARGE_ID);
+  });
+
+  it("dedup works after patching: recordSentMessageId matches inbound", () => {
+    _resetMessageCache();
+    // Outbound: record the precise ID (as send.ts does via extractIdFromRawJson)
+    recordSentMessageId(LARGE_ID);
+
+    // Inbound: simulate JSON.parse + patchPreciseIds
+    const rawText = `{"message":{"header":{"messageid":${LARGE_ID}}}}`;
+    const obj = JSON.parse(rawText);
+    _patchPreciseIds(rawText, obj);
+
+    // Dedup should now match
+    expect(_isDuplicateMessage(obj)).toBe(true);
+  });
+
+  it("dedup fails without patching (demonstrates the bug)", () => {
+    _resetMessageCache();
+    recordSentMessageId(LARGE_ID);
+
+    // Without patching, JSON.parse truncates the ID
+    const rawText = `{"message":{"header":{"messageid":${LARGE_ID}}}}`;
+    const obj = JSON.parse(rawText);
+    // obj.message.header.messageid is now the truncated number
+
+    // extractDedupeKey will produce String(truncated) which won't match
+    expect(String(obj.message.header.messageid)).not.toBe(LARGE_ID);
+    expect(_isDuplicateMessage(obj)).toBe(false); // bug: should be true
   });
 });

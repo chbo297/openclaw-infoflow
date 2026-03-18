@@ -9,6 +9,55 @@ import { handlePrivateChatMessage, handleGroupChatMessage } from "./bot.js";
 import type { ResolvedInfoflowAccount } from "./channel.js";
 import { getInfoflowParseLog, formatInfoflowError, logVerbose } from "./logging.js";
 
+// ---------------------------------------------------------------------------
+// Large-integer precision protection
+// ---------------------------------------------------------------------------
+
+// Infoflow message IDs (e.g. 1859713223686736431) exceed Number.MAX_SAFE_INTEGER (2^53-1).
+// JSON.parse silently truncates these to imprecise values.
+// We extract precise strings from raw JSON text via regex and patch the parsed object.
+const ID_KEYS = ["messageid", "msgid", "MsgId", "msgkey"] as const;
+
+/**
+ * Patches large integer ID fields in `obj` with precise string values
+ * extracted from `rawText` via regex, bypassing JSON.parse precision loss.
+ * Only patches values with 16+ digits (smaller integers are safe).
+ */
+function patchPreciseIds(rawText: string, obj: Record<string, unknown>): void {
+  for (const key of ID_KEYS) {
+    const re = new RegExp(`"${key}"\\s*:\\s*(\\d{16,})`, "g");
+    const preciseValues: string[] = [];
+    let m;
+    while ((m = re.exec(rawText)) !== null) {
+      preciseValues.push(m[1]);
+    }
+    if (preciseValues.length > 0) {
+      patchField(obj, key, preciseValues, 0);
+    }
+  }
+}
+
+/** Recursively walks `obj` and replaces numeric fields named `key` with precise strings (in order). */
+function patchField(obj: unknown, key: string, values: string[], idx: number): number {
+  if (obj == null || typeof obj !== "object") return idx;
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      idx = patchField(item, key, values, idx);
+    }
+    return idx;
+  }
+  const rec = obj as Record<string, unknown>;
+  if (key in rec && typeof rec[key] === "number" && idx < values.length) {
+    rec[key] = values[idx++];
+  }
+  for (const v of Object.values(rec)) {
+    if (v != null && typeof v === "object") {
+      idx = patchField(v, key, values, idx);
+    }
+  }
+  return idx;
+}
+
 const DEDUP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const DEDUP_MAX_SIZE = 1000;
 
@@ -309,10 +358,13 @@ function tryDecryptAndDispatch(params: DecryptDispatchParams): ParseResult {
       continue; // Try next account
     }
 
+    logVerbose(`[infoflow] ${chatType}: decryptedContent=(${decryptedContent})`);
+
     // Parse as JSON first, then try fallback parser (XML for private)
     let msgData: Record<string, unknown> | null = null;
     try {
       msgData = JSON.parse(decryptedContent) as Record<string, unknown>;
+      patchPreciseIds(decryptedContent, msgData);
     } catch {
       if (fallbackParser) {
         msgData = fallbackParser(decryptedContent);
@@ -357,6 +409,7 @@ function handlePrivateMessage(messageJsonStr: string, targets: WebhookTarget[]):
   let messageJson: Record<string, unknown>;
   try {
     messageJson = JSON.parse(messageJsonStr) as Record<string, unknown>;
+    patchPreciseIds(messageJsonStr, messageJson);
   } catch {
     getInfoflowParseLog().error(`[infoflow] private: invalid messageJson`);
     return { handled: true, statusCode: 400, body: "invalid messageJson" };
@@ -430,3 +483,6 @@ export const _parseXmlMessage = parseXmlMessage;
 export function _resetMessageCache(): void {
   messageCache.clear();
 }
+
+/** @internal */
+export const _patchPreciseIds = patchPreciseIds;
