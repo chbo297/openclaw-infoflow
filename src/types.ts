@@ -131,6 +131,8 @@ export type InfoflowAccountConfig = {
   groups?: Record<string, InfoflowGroupConfig>;
   accounts?: Record<string, InfoflowAccountConfig>;
   defaultAccount?: string;
+  /** 是否启用流式卡片输出（默认 false） */
+  streaming?: boolean;
 };
 
 export type ResolvedInfoflowAccount = {
@@ -170,6 +172,8 @@ export type ResolvedInfoflowAccount = {
     appAgentId?: number;
     /** Per-group configuration overrides, keyed by group ID */
     groups?: Record<string, InfoflowGroupConfig>;
+    /** 是否启用流式卡片输出 */
+    streaming?: boolean;
   };
 };
 
@@ -229,3 +233,10 @@ export type HandleGroupChatParams = {
   accountId: string;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
+
+// ---------------------------------------------------------------------------
+// Streaming configuration types (simplified: on/off only)
+// ---------------------------------------------------------------------------
+
+/** 是否启用流式卡片输出 */
+export type InfoflowStreamingEnabled = boolean;

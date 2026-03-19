@@ -9,7 +9,7 @@ import {
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/mattermost";
 import { resolveInfoflowAccount } from "./accounts.js";
 import { getInfoflowBotLog, formatInfoflowError, logVerbose } from "./logging.js";
-import { createInfoflowReplyDispatcher } from "./reply-dispatcher.js";
+import { createInfoflowReplyDispatcherAuto } from "./reply-dispatcher.js";
 import { getInfoflowRuntime } from "./runtime.js";
 import { findSentMessage } from "./sent-message-store.js";
 import type {
@@ -463,6 +463,8 @@ export async function handlePrivateChatMessage(params: HandlePrivateChatParams):
   // Extract sender and content from msgData (flexible field names)
   const fromuser = String(msgData.FromUserId ?? msgData.fromuserid ?? msgData.from ?? "");
   const mes = String(msgData.Content ?? msgData.content ?? msgData.text ?? msgData.mes ?? "");
+  const _msgId = msgData.MsgId ?? msgData.msgid ?? msgData.messageid;
+  logVerbose(`[infoflow:bot] handlePrivateChatMessage: fromuser=${fromuser}, msgId=${_msgId}, mesLen=${mes.length}`);
 
   // Extract sender name (FromUserName is more human-readable than FromUserId)
   const senderName = String(msgData.FromUserName ?? msgData.username ?? fromuser);
@@ -521,7 +523,7 @@ export async function handlePrivateChatMessage(params: HandlePrivateChatParams):
 export async function handleGroupChatMessage(params: HandleGroupChatParams): Promise<void> {
   const { cfg, msgData, accountId, statusSink } = params;
 
-  logVerbose(`[infoflow] group chat: raw msgData: ${JSON.stringify(msgData)}`);
+  logVerbose(`[infoflow:bot] handleGroupChatMessage: raw msgData: ${JSON.stringify(msgData)}`);
 
   // Extract sender from nested structure or flat fields.
   // Some Infoflow events (including bot-authored forwards) only populate `fromid` on the root,
@@ -715,6 +717,8 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
   // Single source for "body shown to LLM": already computed in group handler (line ~666)
   const bodyForAgent = event.bodyForAgent ?? mes;
 
+  logVerbose(`[infoflow:bot] handleInfoflowMessage: chatType=${chatType}, fromuser=${fromuser}, messageId=${event.messageId}, mesLen=${mes.length}`);
+
   const account = resolveInfoflowAccount({ cfg, accountId });
   const core = getInfoflowRuntime();
 
@@ -727,6 +731,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
 
   // "ignore" mode: discard immediately, no save, no think, no reply
   if (isGroup && groupCfg?.replyMode === "ignore") {
+    logVerbose(`[infoflow:bot] handleInfoflowMessage: early return, replyMode=ignore, group=${groupId}`);
     return;
   }
 
@@ -943,6 +948,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
           limit: DEFAULT_GROUP_HISTORY_LIMIT,
         });
       }
+      logVerbose(`[infoflow:bot] handleInfoflowMessage: early return, replyMode=record, group=${groupId}`);
       return;
     }
 
@@ -971,6 +977,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
                 fromuser,
               }) === "record_only"
             ) {
+              logVerbose(`[infoflow:bot] handleInfoflowMessage: early return, mention-only followUp other-mentioned record_only, group=${groupId}`);
               return;
             }
           } else {
@@ -993,6 +1000,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
               limit: DEFAULT_GROUP_HISTORY_LIMIT,
             });
           }
+          logVerbose(`[infoflow:bot] handleInfoflowMessage: early return, mention-only not mentioned, group=${groupId}`);
           return;
         }
       }
@@ -1036,6 +1044,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
                 fromuser,
               }) === "record_only"
             ) {
+              logVerbose(`[infoflow:bot] handleInfoflowMessage: early return, mention-and-watch followUp other-mentioned record_only, group=${groupId}`);
               return;
             }
           } else {
@@ -1058,6 +1067,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
               limit: DEFAULT_GROUP_HISTORY_LIMIT,
             });
           }
+          logVerbose(`[infoflow:bot] handleInfoflowMessage: early return, mention-and-watch no trigger, group=${groupId}`);
           return;
         }
       }
@@ -1094,6 +1104,9 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
 
   // Build unified target: "group:<id>" for group chat, username for private chat
   const to = isGroup && groupId !== undefined ? `group:${groupId}` : fromuser;
+  // Per-message unique session key: prevents concurrent messages from interfering
+  // with each other's streaming sessions (same user/group can have multiple in-flight replies)
+  const streamingSessionKey = `${to}:${event.messageId ?? Date.now()}`;
 
   // Provide mention context to the LLM so it can decide who to @mention
   if (isGroup && event.mentionIds) {
@@ -1127,11 +1140,12 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     `[infoflow:bot] dispatching to LLM: from=${fromuser}, group=${groupId ?? "N/A"}, trigger=${triggerReason}, replyMode=${groupCfg?.replyMode ?? "N/A"}${mentionIdsLog} | ${bodyLog} | ${sysPromptLog}`,
   );
 
-  const { dispatcherOptions, replyOptions } = createInfoflowReplyDispatcher({
+  const { dispatcherOptions, replyOptions } = createInfoflowReplyDispatcherAuto({
     cfg,
     agentId: route.agentId,
     accountId: account.accountId,
     to,
+    streamingSessionKey,
     statusSink,
     // @mention the sender back when bot was directly @mentioned in a group
     atOptions: isGroup && event.wasMentioned ? { atUserIds: [fromuser] } : undefined,
