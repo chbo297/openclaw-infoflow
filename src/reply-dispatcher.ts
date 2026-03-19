@@ -27,16 +27,20 @@ const PREVIEW_MAX_LENGTH = 100;
 // ---------------------------------------------------------------------------
 // Active Streaming Sessions Tracker
 // ---------------------------------------------------------------------------
-// Track active streaming card sessions by target address.
+// Track active streaming card sessions by a per-message unique session key.
 // Used to prevent channel.outbound.sendText from sending duplicate messages
 // when streaming card mode is active.
 //
-// Using Map<string, StreamingCardSession> instead of Set<string> to:
-// 1. Provide concurrency protection for the same target
-// 2. Allow finalizing old sessions before starting new ones
+// Key design:
+// - sessionKey is per-message unique (e.g. "group:123:msgid-abc"), preventing
+//   concurrent messages from interfering with each other's sessions.
+// - entry.to stores the delivery target ("group:<id>" or username) for
+//   isStreamingSessionActive() lookups.
 
-/** Session entry with finalize callback */
+/** Session entry with delivery target and finalize callback */
 type ActiveSessionEntry = {
+  /** Delivery target: "group:<id>" or username */
+  to: string;
   session: StreamingCardSession | null;
   finalize: () => Promise<unknown>;
 };
@@ -44,48 +48,50 @@ type ActiveSessionEntry = {
 const activeStreamingSessions = new Map<string, ActiveSessionEntry>();
 
 /**
- * Check if a streaming card session is active for the given target
+ * Check if any streaming card session is active for the given delivery target.
+ * Called from channel.ts to suppress duplicate sendText/sendMedia while streaming.
  */
 export function isStreamingSessionActive(to: string): boolean {
-  return activeStreamingSessions.has(to);
+  for (const entry of activeStreamingSessions.values()) {
+    if (entry.to === to) return true;
+  }
+  return false;
 }
 
 /**
- * Register a streaming session for the given target.
- * If there's an existing session, it will be finalized first.
+ * Register a per-message streaming session by its unique sessionKey.
+ * If the same sessionKey already exists (e.g. duplicate message delivery),
+ * the old session is finalized first as a safety measure.
+ * With per-message unique keys this guard will rarely fire in practice.
  * @internal
  */
-async function registerStreamingSession(
-  to: string,
-  entry: ActiveSessionEntry,
-): Promise<void> {
-  const existing = activeStreamingSessions.get(to);
+async function registerStreamingSession(sessionKey: string, entry: ActiveSessionEntry): Promise<void> {
+  const existing = activeStreamingSessions.get(sessionKey);
   if (existing) {
-    // Finalize the old session before registering the new one
-    logVerbose(`[infoflow:streaming] finalizing existing session for target=${to} before starting new one`);
+    logVerbose(`[infoflow:streaming] finalizing existing session for sessionKey=${sessionKey}`);
     try {
       await existing.finalize();
     } catch (err) {
       logVerbose(`[infoflow:streaming] error finalizing existing session: ${err}`);
     }
   }
-  activeStreamingSessions.set(to, entry);
+  activeStreamingSessions.set(sessionKey, entry);
 }
 
 /**
- * Mark a streaming card session as completed for the given target
+ * Mark a streaming session as completed by its unique sessionKey.
  * @internal
  */
-function markStreamingSessionComplete(to: string): void {
-  activeStreamingSessions.delete(to);
+function markStreamingSessionComplete(sessionKey: string): void {
+  activeStreamingSessions.delete(sessionKey);
 }
 
 /**
- * Update the session object in the active sessions map
+ * Update the session object in the active sessions map by sessionKey.
  * @internal
  */
-function updateActiveSession(to: string, session: StreamingCardSession): void {
-  const entry = activeStreamingSessions.get(to);
+function updateActiveSession(sessionKey: string, session: StreamingCardSession): void {
+  const entry = activeStreamingSessions.get(sessionKey);
   if (entry) {
     entry.session = session;
   }
@@ -103,6 +109,13 @@ export type CreateInfoflowReplyDispatcherParams = {
   accountId: string;
   /** Target: "group:<id>" for group chat, username for private chat */
   to: string;
+  /**
+   * Per-message unique key for streaming session isolation.
+   * Defaults to `to` if not provided.
+   * Pass a message-scoped unique value (e.g. `"${to}:${messageId}"`) to allow
+   * concurrent sessions for the same target without mutual interference.
+   */
+  streamingSessionKey?: string;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   /** AT options for @mentioning members in group messages */
   atOptions?: InfoflowAtOptions;
@@ -484,10 +497,15 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
     agentId,
     accountId,
     to,
+    streamingSessionKey,
     statusSink,
     updateIntervalMs = 100,
   } = params;
   const core = getInfoflowRuntime();
+
+  // Per-message unique key for activeStreamingSessions isolation.
+  // Allows concurrent sessions for the same delivery target (to) without interference.
+  const sessionKey = streamingSessionKey ?? to;
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
@@ -585,9 +603,12 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
     return { finalized, hadContent, content };
   };
 
-  // Register this session with finalize callback (will finalize any existing session first)
-  // Note: We register immediately with a null session, then update it when the session is created
-  const sessionRegistered = registerStreamingSession(to, {
+  // Register this session by its per-message unique sessionKey.
+  // With unique keys, same-target messages run independently without mutual interference.
+  // The finalize guard inside registerStreamingSession handles the rare edge case of
+  // duplicate message delivery with the same sessionKey.
+  const sessionRegistered = registerStreamingSession(sessionKey, {
+    to,
     session: null,
     finalize: closeStreaming,
   });
@@ -604,8 +625,6 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
     }
     const mode = options?.mode ?? "snapshot";
     streamText = mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
-    // 标记已通过流式方式发送内容
-    streamingContentDelivered = true;
 
     logVerbose(`[infoflow:streaming] queueStreamingUpdate: mode=${mode}, textLength=${streamText.length}`);
 
@@ -631,6 +650,7 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
           lastUpdateTime = Date.now();
           lastSyncedText = streamText; // 记录已同步的文本
           consecutiveFailures = 0;
+          streamingContentDelivered = true; // 首次成功更新后才标记已发送
           statusSink?.({ lastOutboundAt: Date.now() });
           logVerbose(`[infoflow:streaming] card updated successfully`);
           return true;
@@ -649,7 +669,7 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
         if (session) {
           session.finalized = true;
         }
-        markStreamingSessionComplete(to);
+        markStreamingSessionComplete(sessionKey);
       }
       return false;
     };
@@ -703,7 +723,7 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
   const startStreaming = () => {
     if (sessionStartPromise || session) return;
     sessionStartPromise = (async () => {
-      // Wait for session registration to complete (which may finalize existing session)
+      // Wait for session registration (handles rare duplicate-messageId edge case)
       await sessionRegistered;
 
       const result = await startStreamingSession({
@@ -715,9 +735,7 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
       if (result.ok && result.session) {
         session = result.session;
         // Update the session in the active sessions map
-        updateActiveSession(to, session);
-        // 标记流式卡片已创建（即使还没更新内容）
-        streamingContentDelivered = true;
+        updateActiveSession(sessionKey, session);
         logVerbose(`[infoflow:streaming] session created with modifyToken: ${session.modifyToken}`);
       } else {
         getInfoflowSendLog().error(
@@ -791,8 +809,13 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
         if (info?.kind === "final") {
           // final 类型：合并最终文本并关闭流式
           streamText = mergeStreamingText(streamText, text);
-          await closeStreaming();
+          const closeResult = await closeStreaming();
           deliveredFinalTexts.add(text);
+          // 容错：如果 finalize 失败，发送降级消息
+          if (!closeResult.finalized && closeResult.hadContent) {
+            logVerbose(`[infoflow:streaming] finalize failed in deliver(final), sending fallback`);
+            await fallbackSend(closeResult.content);
+          }
           // 媒体单独发送
           if (hasMedia) {
             for (const mediaUrl of mediaList) {
@@ -822,7 +845,7 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
         // 继续发送媒体（媒体不通过流式卡片）
       } else {
         logVerbose(`[infoflow:streaming] fallback to normal send: session=${!!session}, finalized=${session?.finalized}`);
-        markStreamingSessionComplete(to);
+        markStreamingSessionComplete(sessionKey);
         await fallbackSend(text);
         if (info?.kind === "final") {
           deliveredFinalTexts.add(text);
@@ -845,7 +868,7 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
 
   const onError = async (err: unknown) => {
     const result = await closeStreaming();
-    markStreamingSessionComplete(to);
+    markStreamingSessionComplete(sessionKey);
 
     // 容错：如果 finalize 失败但有内容，发送补救消息
     if (!result.finalized && result.hadContent) {
@@ -864,7 +887,7 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
 
   const onIdle = async () => {
     const result = await closeStreaming();
-    markStreamingSessionComplete(to);
+    markStreamingSessionComplete(sessionKey);
 
     // 容错：如果 finalize 失败但有内容，发送补救消息
     if (!result.finalized && result.hadContent) {
@@ -903,7 +926,7 @@ export function createStreamingCardReplyDispatcher(params: CreateStreamingCardRe
     // 暴露 finalize 供外部调用
     finalize: async () => {
       const result = await closeStreaming();
-      markStreamingSessionComplete(to);
+      markStreamingSessionComplete(sessionKey);
 
       // 容错：如果 finalize 失败但有内容，发送补救消息
       if (!result.finalized && result.hadContent) {

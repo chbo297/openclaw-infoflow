@@ -320,11 +320,14 @@ function tryDecryptAndDispatch(params: DecryptDispatchParams): ParseResult {
     }
 
     if (msgData && Object.keys(msgData).length > 0) {
+      const dedupeKey = extractDedupeKey(msgData);
+      logVerbose(`[infoflow] ${chatType}: parsed msgData, dedupeKey=${dedupeKey}`);
       if (isDuplicateMessage(msgData)) {
-        logVerbose(`[infoflow] ${chatType}: duplicate message, skipping`);
+        logVerbose(`[infoflow] ${chatType}: duplicate message (key=${dedupeKey}), skipping`);
         return { handled: true, statusCode: 200, body: "success" };
       }
 
+      logVerbose(`[infoflow] ${chatType}: dispatching (key=${dedupeKey})`);
       target.statusSink?.({ lastInboundAt: Date.now() });
 
       // Fire-and-forget with centralized error handling

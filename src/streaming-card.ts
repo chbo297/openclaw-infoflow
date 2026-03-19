@@ -104,6 +104,8 @@ export type UpdateStreamingCardParams = {
   contents: StreamingCardContents;
   /** 用户ID列表（仅 user 类型需要） */
   userIds?: string[];
+  /** 群聊ID（仅 group 类型需要，用于 notify_list） */
+  groupId?: string;
   /** 账号ID */
   accountId?: string;
   timeoutMs?: number;
@@ -277,6 +279,7 @@ export async function updateStreamingCard(
     receiverType,
     contents,
     userIds,
+    groupId,
     accountId,
     timeoutMs = DEFAULT_TIMEOUT_MS,
   } = params;
@@ -323,10 +326,16 @@ export async function updateStreamingCard(
       };
     } else {
       // 群聊视角更新
+      // notify_list 告知服务端通知哪个群（to_type: 2=群聊）
       apiPath = STREAMING_CARD_UPDATE_GROUP_PATH;
       payload = {
         modify_token: modifyToken,
         new_dynamic_msg_content: contents,
+        // version 由业务方自维护，使用时间戳确保单调递增（文档说明：可设置为时间戳）
+        version: Date.now(),
+        notify_list: groupId
+          ? [{ to_type: 2, to_ids: [Number(groupId)] }]
+          : [],
       };
     }
 
@@ -427,6 +436,7 @@ export async function appendToStreamingSession(
     receiverType: session.receiverType,
     contents,
     userIds: session.receiverType === "user" ? [session.receiverId] : undefined,
+    groupId: session.receiverType === "group" ? session.receiverId : undefined,
     accountId: session.account.accountId,
   });
 }
@@ -457,8 +467,6 @@ export async function finalizeStreamingSession(
     think_status_color: { type: "text", content: "#5C6473" },
     think_status_text: { type: "text", content: "思考完成" },
     think_layout_install: { type: "text", content: "0" },
-    // 显示赞踩区域
-    feedbackLayoutInstall: { type: "text", content: "1" },
   };
 
   const result = await updateStreamingCard({
@@ -467,6 +475,7 @@ export async function finalizeStreamingSession(
     receiverType: session.receiverType,
     contents,
     userIds: session.receiverType === "user" ? [session.receiverId] : undefined,
+    groupId: session.receiverType === "group" ? session.receiverId : undefined,
     accountId: session.account.accountId,
   });
 
@@ -500,6 +509,7 @@ export async function updateStreamingStatus(
     receiverType: session.receiverType,
     contents,
     userIds: session.receiverType === "user" ? [session.receiverId] : undefined,
+    groupId: session.receiverType === "group" ? session.receiverId : undefined,
     accountId: session.account.accountId,
   });
 }
