@@ -126,8 +126,9 @@ if [ ! -d "$PLUGIN_DIR/dist" ] && [[ "$DRY_RUN" != "true" ]]; then
 fi
 echo "  ✓ 已检测到构建产物目录：$PLUGIN_DIR/dist"
 
-if [ ! -f "$CONFIG_FILE" ]; then
-  echo "  ✗ 未找到 $CONFIG_FILE，请先完成 OpenClaw 初始化后再部署"
+CONFIG_FILE_PATH="${CONFIG_FILE:-}"
+if [ -z "$CONFIG_FILE_PATH" ] || [ ! -f "$CONFIG_FILE_PATH" ]; then
+  echo "  ✗ 未找到 $CONFIG_FILE_PATH，请先完成 OpenClaw 初始化后再部署"
   exit 1
 fi
 
@@ -139,7 +140,7 @@ fi
 echo "==> 更新 OpenClaw 配置"
 node -e "
   const fs = require('fs');
-  const cfg = JSON.parse(fs.readFileSync('$CONFIG_FILE', 'utf8'));
+  const cfg = JSON.parse(fs.readFileSync('$CONFIG_FILE_PATH', 'utf8'));
   const id = '$PLUGIN_ID';
 
   cfg.plugins = cfg.plugins ?? {};
@@ -148,7 +149,7 @@ node -e "
   else if (!cfg.plugins.entries[id].enabled) cfg.plugins.entries[id].enabled = true;
 
   if (Array.isArray(cfg.plugins.allow) && !cfg.plugins.allow.includes(id)) cfg.plugins.allow.push(id);
-  fs.writeFileSync('$CONFIG_FILE', JSON.stringify(cfg, null, 2) + '\n');
+  fs.writeFileSync('$CONFIG_FILE_PATH', JSON.stringify(cfg, null, 2) + '\n');
 "
 
 echo "==> 检查 OpenClaw gateway 运行状态"
