@@ -1,6 +1,6 @@
 {
   "name": "@chbo297/infoflow",
-  "version": "2026.5.6-beta.0",
+  "version": "2026.5.6",
   "description": "OpenClaw Infoflow (如流) channel plugin for Baidu enterprise messaging",
   "type": "module",
   "main": "dist/index.js",
