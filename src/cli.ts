@@ -104,7 +104,7 @@ function installFromRegistry(options: CliOptions, packageName: string, pluginDir
     runOrFail("mkdir", ["-p", pluginDir], tempRoot, options.dryRun);
     runOrFail(
       "rsync",
-      ["-av", "--delete", `${join(tempRoot, "package")}/`, `${pluginDir}/`, "--exclude", "node_modules", "--exclude", "dist"],
+      ["-av", "--delete", `${join(tempRoot, "package")}/`, `${pluginDir}/`, "--exclude", "node_modules"],
       tempRoot,
       options.dryRun,
     );
