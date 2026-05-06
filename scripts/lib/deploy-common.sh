@@ -97,12 +97,23 @@ echo "==> 构建插件（确保 build 完成）"
 if [[ "$DRY_RUN" == "true" ]]; then
   echo "  - dry-run 模式，跳过实际构建"
 else
-  if node -e "const p=require('./package.json'); process.exit(p?.scripts?.build ? 0 : 1)"; then
-    npm run build
+  if [ -d "$PLUGIN_DIR/dist" ] && [ ! -f "$PLUGIN_DIR/tsconfig.build.json" ] && [ ! -f "$PLUGIN_DIR/tsconfig.json" ]; then
+    echo "  - 检测到预编译发布包（无 tsconfig），跳过构建"
+  elif node -e "const p=require('./package.json'); process.exit(p?.scripts?.build ? 0 : 1)"; then
+    if [ -f "$PLUGIN_DIR/tsconfig.build.json" ] || [ -f "$PLUGIN_DIR/tsconfig.json" ]; then
+      npm run build
+    elif [ -d "$PLUGIN_DIR/dist" ]; then
+      echo "  - scripts.build 存在但缺少 tsconfig，使用已存在 dist 产物并跳过构建"
+    else
+      echo "  ✗ scripts.build 存在但缺少 tsconfig 且无 dist 产物"
+      exit 1
+    fi
   elif [ -f "$PLUGIN_DIR/tsconfig.build.json" ]; then
     npx -y -p typescript tsc -p "$PLUGIN_DIR/tsconfig.build.json"
   elif [ -f "$PLUGIN_DIR/tsconfig.json" ]; then
     npx -y -p typescript tsc -p "$PLUGIN_DIR/tsconfig.json"
+  elif [ -d "$PLUGIN_DIR/dist" ]; then
+    echo "  - 未检测到构建配置，使用已存在 dist 产物并跳过构建"
   else
     echo "  ✗ 未检测到 scripts.build 或 tsconfig，无法构建"
     exit 1
