@@ -1,0 +1,13 @@
+{
+  "name": "@chbo297/infoflow-openclaw-tools",
+  "version": "2026.5.7-beta.2",
+  "description": "CLI tools for installing/updating OpenClaw Infoflow plugin",
+  "type": "module",
+  "bin": {
+    "infoflow-openclaw-tools": "bin/cli.mjs"
+  },
+  "license": "MIT",
+  "files": [
+    "bin/**"
+  ]
+}

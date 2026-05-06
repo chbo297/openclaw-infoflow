@@ -37,18 +37,50 @@ bash scripts/deploy.sh
 BAIDU_NPM_REGISTRY=http://registry.npm.baidu-int.com bash scripts/deploy.sh
 ```
 
-### 通过 npx 一键更新安装
+### 首次安装（推荐命令）
 
-发布到 npm 后，可直接通过 `npx` 安装/升级到指定版本：
+首次在机器上安装时，推荐使用以下两种方式。
+
+方式 A：通过独立 tools 包安装并部署（推荐，支持 `update` 子命令）
 
 ```bash
-npm_config_registry=http://registry.npm.baidu-int.com npx -y @chbo297/infoflow update --version 2026.5.6
+# 正式版（latest）
+npx -y @chbo297/infoflow-openclaw-tools update --version 2026.5.6 --registry https://registry.npmjs.org
+
+# Beta 版（示例）
+npx -y @chbo297/infoflow-openclaw-tools@beta update --version 2026.5.7-beta.2 --registry https://registry.npmjs.org
+```
+
+方式 B：通过 OpenClaw 插件命令安装
+
+```bash
+# 正式版
+openclaw plugins install @chbo297/infoflow@2026.5.6
+
+# Beta 版（示例）
+openclaw plugins install @chbo297/infoflow@2026.5.7-beta.2
+```
+
+安装后建议检查插件状态：
+
+```bash
+openclaw plugins list
+openclaw plugins inspect infoflow
+```
+
+### 通过 npx 一键更新安装
+
+发布到 npm 后，可直接通过独立 tools 包执行安装/升级：
+
+```bash
+npx -y @chbo297/infoflow-openclaw-tools update --version 2026.5.6 --registry https://registry.npmjs.org
 ```
 
 常用参数：
 
 - `--version <version>`: 指定安装版本（默认 `latest`）
-- `--registry <url>`: 指定 npm 源（默认读取 `npm_config_registry`，否则回退 `http://registry.npm.baidu-int.com`）
+- `--registry <url>`: 插件包下载源（默认 `https://registry.npmjs.org`）
+- `--baidu-registry <url>`: `@baidu/infoflow-sdk-nodejs` 下载源（默认读取 `npm_config_registry`，否则回退 `http://registry.npm.baidu-int.com`）
 - `--channel-id <id>`: 目标插件目录名（默认 `infoflow`，安装到 `~/.openclaw/extensions/<id>`）
 - `--dry-run`: 仅打印命令，不写入系统
 
@@ -56,6 +88,7 @@ npm_config_registry=http://registry.npm.baidu-int.com npx -y @chbo297/infoflow u
 
 - `npx ... update` 与 `bash scripts/deploy.sh` 复用同一套部署核心逻辑（依赖安装、websocket 依赖校验、构建、配置写入、按状态重启 gateway）。
 - 如果 gateway 未运行，脚本会跳过重启，仅完成插件安装与构建。
+- 插件包 `@chbo297/infoflow` 不再内置 `child_process` CLI，避免被 `openclaw plugins install` 的危险代码检测拦截。
 
 ### WebSocket 模式（可选）
 
