@@ -3,8 +3,15 @@
  * Handles multi-account support with config merging.
  */
 
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId, type OpenClawConfig } from "openclaw/plugin-sdk";
-import type { InfoflowAccountConfig, ResolvedInfoflowAccount } from "./types.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/core";
+import type {
+  InfoflowAccountConfig,
+  InfoflowConnectionMode,
+  ResolvedInfoflowAccount,
+} from "./types.js";
+
+const DEFAULT_INFOFLOW_WS_GATEWAY = "infoflow-open-gateway.weiyun.baidu.com";
 
 // ---------------------------------------------------------------------------
 // Config Access Helpers
@@ -62,6 +69,9 @@ function mergeInfoflowAccountConfig(
   accountId: string,
 ): {
   apiHost: string;
+  connectionMode?: InfoflowConnectionMode;
+  wsGateway?: string;
+  wsConnectDomain?: string;
   checkToken: string;
   encodingAESKey: string;
   appKey: string;
@@ -80,6 +90,9 @@ function mergeInfoflowAccountConfig(
   const account = raw.accounts?.[accountId] ?? {};
   return { ...base, ...account } as {
     apiHost: string;
+    connectionMode?: InfoflowConnectionMode;
+    wsGateway?: string;
+    wsConnectDomain?: string;
     checkToken: string;
     encodingAESKey: string;
     appKey: string;
@@ -121,8 +134,14 @@ export function resolveInfoflowAccount(params: {
   const encodingAESKey = merged.encodingAESKey ?? "";
   const appKey = merged.appKey ?? "";
   const appSecret = merged.appSecret ?? "";
+  const effectiveConnectionMode: InfoflowConnectionMode =
+    merged.connectionMode ?? "webhook";
+  const wsGateway = merged.wsGateway?.trim() || DEFAULT_INFOFLOW_WS_GATEWAY;
+  const wsConnectDomain = merged.wsConnectDomain?.trim() || undefined;
   const configured =
-    Boolean(checkToken) && Boolean(encodingAESKey) && Boolean(appKey) && Boolean(appSecret);
+    effectiveConnectionMode === "websocket"
+      ? Boolean(appKey) && Boolean(appSecret)
+      : Boolean(checkToken) && Boolean(encodingAESKey) && Boolean(appKey) && Boolean(appSecret);
 
   return {
     accountId,
@@ -133,6 +152,9 @@ export function resolveInfoflowAccount(params: {
       enabled: merged.enabled,
       name: merged.name,
       apiHost,
+      connectionMode: effectiveConnectionMode,
+      wsGateway,
+      wsConnectDomain,
       checkToken,
       encodingAESKey,
       appKey,

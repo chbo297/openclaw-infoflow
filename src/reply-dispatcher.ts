@@ -1,8 +1,5 @@
-import {
-  createReplyPrefixOptions,
-  type OpenClawConfig,
-  type ReplyPayload,
-} from "openclaw/plugin-sdk";
+import type { OpenClawConfig, ReplyPayload } from "openclaw/plugin-sdk";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { getInfoflowSendLog, formatInfoflowError, logVerbose } from "./logging.js";
 import { parseMarkdownForLocalImages } from "./markdown-local-images.js";
 import { prepareInfoflowImageBase64, sendInfoflowImageMessage } from "./media.js";

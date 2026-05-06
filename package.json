@@ -3,7 +3,7 @@
   "version": "2026.3.18",
   "description": "OpenClaw Infoflow (如流) channel plugin for Baidu enterprise messaging",
   "type": "module",
-  "main": "index.ts",
+  "main": "dist/index.js",
   "license": "MIT",
   "keywords": [
     "openclaw",
@@ -19,7 +19,13 @@
     "url": "https://github.com/chbo297/openclaw-infoflow"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.2"
+    "@baidu/infoflow-sdk-nodejs": ">=0.1.0",
+    "openclaw": ">=2026.5.4"
+  },
+  "peerDependenciesMeta": {
+    "@baidu/infoflow-sdk-nodejs": {
+      "optional": true
+    }
   },
   "openclaw": {
     "extensions": [
@@ -37,5 +43,14 @@
       "npmSpec": "@chbo297/infoflow",
       "defaultChoice": "npm"
     }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
   }
 }

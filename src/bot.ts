@@ -1,12 +1,14 @@
 import {
+  buildAgentMediaPayload,
+  getAgentScopedMediaLocalRoots,
+} from "openclaw/plugin-sdk/agent-media-payload";
+import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
   recordPendingHistoryEntryIfEnabled,
-  buildAgentMediaPayload,
-} from "openclaw/plugin-sdk";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/mattermost";
+} from "openclaw/plugin-sdk/reply-history";
 import { resolveInfoflowAccount } from "./accounts.js";
 import { getInfoflowBotLog, formatInfoflowError, logVerbose } from "./logging.js";
 import { createInfoflowReplyDispatcher } from "./reply-dispatcher.js";
@@ -52,34 +54,62 @@ type InfoflowBodyItem = {
   messageid?: string | number;
 };
 
+/** Identity used to detect @bot in group body (name, app agent id, or persisted robot id). */
+export type InfoflowBotMentionIdentity = {
+  robotName?: string;
+  appAgentId?: number;
+  robotId?: string;
+};
+
 /**
  * Check if the bot was @mentioned in the message body.
- * Matches by robotName against the AT item's display name (case-insensitive).
+ * Matches appAgentId, robotName, or robotId against AT items (same order as Baidu reference plugin).
  */
-function checkBotMentioned(bodyItems: InfoflowBodyItem[], robotName?: string): boolean {
-  if (!robotName) return false;
-  const normalizedRobotName = robotName.toLowerCase();
+export function checkBotMentioned(
+  bodyItems: InfoflowBodyItem[],
+  identityOrName?: string | InfoflowBotMentionIdentity,
+): boolean {
+  const identity: InfoflowBotMentionIdentity =
+    typeof identityOrName === "string" || identityOrName === undefined
+      ? { robotName: identityOrName }
+      : identityOrName;
+  const { robotName, appAgentId, robotId } = identity;
+  const appAgentIdStr = appAgentId != null ? String(appAgentId) : undefined;
+  const normalizedRobotName = robotName?.toLowerCase();
+  const normalizedRobotId = robotId?.trim();
   for (const item of bodyItems) {
     if (item.type !== "AT") continue;
-    if (item.name?.toLowerCase() === normalizedRobotName) return true;
+    if (appAgentIdStr && item.robotid != null && String(item.robotid) === appAgentIdStr)
+      return true;
+    if (normalizedRobotName && item.name?.toLowerCase() === normalizedRobotName) return true;
+    if (normalizedRobotId && item.robotid != null && String(item.robotid) === normalizedRobotId)
+      return true;
   }
   return false;
 }
 
 /**
- * When the bot is @mentioned (item.name matches robotName), return that AT item's robotid.
- * Used to discover and persist the account's robotId from incoming group messages.
+ * When the bot is @mentioned, return that AT item's robotid string for persistence.
  */
 function getBotRobotidFromBody(
   bodyItems: InfoflowBodyItem[],
   robotName?: string,
-): number | undefined {
-  if (!robotName) return undefined;
-  const normalizedRobotName = robotName.toLowerCase();
+  robotId?: string,
+): string | undefined {
+  const normalizedRobotName = robotName?.toLowerCase();
+  const normalizedRobotId = robotId?.trim();
   for (const item of bodyItems) {
     if (item.type !== "AT") continue;
-    if (item.name?.toLowerCase() === normalizedRobotName && item.robotid != null)
-      return item.robotid;
+    if (normalizedRobotId && item.robotid != null && String(item.robotid) === normalizedRobotId) {
+      return normalizedRobotId;
+    }
+    if (
+      normalizedRobotName &&
+      item.name?.toLowerCase() === normalizedRobotName &&
+      item.robotid != null
+    ) {
+      return String(item.robotid);
+    }
   }
   return undefined;
 }
@@ -557,14 +587,27 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
   const account = resolveInfoflowAccount({ cfg, accountId });
   const robotName = account.config.robotName;
 
-  // Check if bot was @mentioned (by robotName)
-  const wasMentioned = checkBotMentioned(bodyItems, robotName);
+  const mentionIdentity: InfoflowBotMentionIdentity = {
+    robotName,
+    appAgentId: account.config.appAgentId,
+    robotId: account.config.robotId?.trim() || undefined,
+  };
+
+  const rawEventType = String(msgData.eventtype ?? "");
+  const wasMentioned =
+    msgData.wasMentioned === true
+      ? true
+      : rawEventType === "ALL_MESSAGE_FORWARD"
+        ? checkBotMentioned(bodyItems, mentionIdentity)
+        : rawEventType === "MESSAGE_RECEIVE"
+          ? true
+          : checkBotMentioned(bodyItems, mentionIdentity);
 
   // When bot is @mentioned, discover and persist robotId from the AT item so we can ignore our own messages later.
   let effectiveRobotId = account.config.robotId?.trim() || undefined;
-  const discoveredRobotid = getBotRobotidFromBody(bodyItems, robotName);
-  if (wasMentioned && discoveredRobotid != null) {
-    const newRobotId = String(discoveredRobotid);
+  const discoveredRobotId = getBotRobotidFromBody(bodyItems, robotName, effectiveRobotId);
+  if (wasMentioned && discoveredRobotId != null) {
+    const newRobotId = discoveredRobotId;
     if (newRobotId !== effectiveRobotId) {
       try {
         const runtime = getInfoflowRuntime();

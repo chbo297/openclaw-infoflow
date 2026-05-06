@@ -4,8 +4,12 @@
  * @all and @user mentions in group messages.
  */
 
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "openclaw/plugin-sdk";
-import { extractToolSend, jsonResult, readStringParam } from "openclaw/plugin-sdk";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+} from "openclaw/plugin-sdk";
+import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { resolveInfoflowAccount } from "./accounts.js";
 import { logVerbose } from "./logging.js";
 import { prepareInfoflowImageBase64, sendInfoflowImageMessage } from "./media.js";
@@ -29,7 +33,9 @@ const RECALL_PARTIAL_HINT =
   "Some recalls failed. Send a brief reply stating only the failure reason(s).";
 
 export const infoflowMessageActions: ChannelMessageActionAdapter = {
-  listActions: (): ChannelMessageActionName[] => ["send", "delete"],
+  describeMessageTool: () => ({
+    actions: ["send", "delete"] satisfies readonly ChannelMessageActionName[],
+  }),
 
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
 

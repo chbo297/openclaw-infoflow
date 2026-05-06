@@ -1,3 +1,4 @@
+import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
@@ -6,9 +7,7 @@ import {
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   setAccountEnabledInConfigSection,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/core";
 import {
   getChannelSection,
   listInfoflowAccountIds,
@@ -19,19 +18,67 @@ import { infoflowMessageActions } from "./actions.js";
 import { logVerbose } from "./logging.js";
 import { parseMarkdownForLocalImages } from "./markdown-local-images.js";
 import { prepareInfoflowImageBase64, sendInfoflowImageMessage } from "./media.js";
-import { startInfoflowMonitor } from "./monitor.js";
+import { startInfoflowMonitor, startInfoflowWSMonitor } from "./monitor.js";
 import { getInfoflowRuntime } from "./runtime.js";
 import { sendInfoflowMessage } from "./send.js";
 import { normalizeInfoflowTarget, looksLikeInfoflowId } from "./targets.js";
 import type { InfoflowOutboundReply, ResolvedInfoflowAccount } from "./types.js";
 
 // Re-export types and account functions for external consumers
-export type { InfoflowAccountConfig, ResolvedInfoflowAccount } from "./types.js";
+export type {
+  InfoflowAccountConfig,
+  InfoflowConnectionMode,
+  ResolvedInfoflowAccount,
+} from "./types.js";
 export { resolveInfoflowAccount } from "./accounts.js";
 
 // ---------------------------------------------------------------------------
 // Channel plugin
 // ---------------------------------------------------------------------------
+
+function applyInfoflowSetupPatch(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  patch: Record<string, unknown>;
+}): OpenClawConfig {
+  const { cfg, accountId, patch } = params;
+  const channels = (cfg.channels ?? {}) as Record<string, unknown>;
+  const existingInfoflow = (channels["infoflow"] ?? {}) as Record<string, unknown>;
+
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return {
+      ...cfg,
+      channels: {
+        ...channels,
+        infoflow: {
+          ...existingInfoflow,
+          enabled: true,
+          ...patch,
+        },
+      },
+    };
+  }
+
+  const existingAccounts = (existingInfoflow.accounts ?? {}) as Record<string, Record<string, unknown>>;
+  return {
+    ...cfg,
+    channels: {
+      ...channels,
+      infoflow: {
+        ...existingInfoflow,
+        enabled: true,
+        accounts: {
+          ...existingAccounts,
+          [accountId]: {
+            ...existingAccounts[accountId],
+            enabled: true,
+            ...patch,
+          },
+        },
+      },
+    },
+  };
+}
 
 export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
   id: "infoflow",
@@ -96,7 +143,7 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
         policy: ((account.config as Record<string, unknown>).dmPolicy as string) ?? "open",
         allowFrom: ((account.config as Record<string, unknown>).allowFrom as string[]) ?? [],
         policyPath: `${basePath}dmPolicy`,
-        allowFromPath: basePath,
+        allowFromPath: `${basePath}allowFrom`,
         approveHint: formatPairingApproveHint("infoflow"),
         normalizeEntry: (raw: string) => raw.replace(/^infoflow:/i, ""),
       };
@@ -169,40 +216,7 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
       if (input.token) {
         patch.checkToken = input.token;
       }
-
-      const existing = (next.channels?.["infoflow"] ?? {}) as Record<string, unknown>;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            infoflow: {
-              ...existing,
-              enabled: true,
-              ...patch,
-            },
-          },
-        } as OpenClawConfig;
-      }
-      const existingAccounts = (existing.accounts ?? {}) as Record<string, Record<string, unknown>>;
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          infoflow: {
-            ...existing,
-            enabled: true,
-            accounts: {
-              ...existingAccounts,
-              [accountId]: {
-                ...existingAccounts[accountId],
-                enabled: true,
-                ...patch,
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
+      return applyInfoflowSetupPatch({ cfg: next, accountId, patch });
     },
   },
   outbound: {
@@ -390,19 +404,24 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
-      ctx.log?.info(`[${account.accountId}] starting Infoflow webhook`);
+      const connectionMode = account.config.connectionMode ?? "webhook";
+      ctx.log?.info(`[${account.accountId}] starting Infoflow (${connectionMode})`);
       ctx.setStatus({
         accountId: account.accountId,
         running: true,
         lastStartAt: Date.now(),
       });
-      const unregister = await startInfoflowMonitor({
+      const monitorOptions = {
         account,
         config: ctx.cfg,
-        runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
-        statusSink: (patch) => ctx.setStatus({ accountId: account.accountId, ...patch }),
-      });
+        statusSink: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) =>
+          ctx.setStatus({ accountId: account.accountId, ...patch }),
+      };
+      const unregister =
+        connectionMode === "websocket"
+          ? await startInfoflowWSMonitor(monitorOptions)
+          : await startInfoflowMonitor(monitorOptions);
 
       // Keep the channel alive until explicitly stopped.
       // Without this, the promise resolves immediately and the gateway

@@ -73,9 +73,9 @@ describe("infoflowMessageActions", () => {
     mockRemoveRecalledMessages.mockReset();
   });
 
-  it("listActions returns send and delete", () => {
-    const actions = infoflowMessageActions.listActions!({ cfg: {} as never });
-    expect(actions).toEqual(["send", "delete"]);
+  it("describeMessageTool returns send and delete", () => {
+    const discovery = infoflowMessageActions.describeMessageTool?.({ cfg: {} as never });
+    expect(discovery?.actions).toEqual(["send", "delete"]);
   });
 
   it("throws for unsupported actions", async () => {

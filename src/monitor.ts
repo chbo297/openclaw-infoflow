@@ -8,6 +8,7 @@ import {
 } from "./infoflow-req-parse.js";
 import { getInfoflowWebhookLog, formatInfoflowError, logVerbose } from "./logging.js";
 import { getInfoflowRuntime } from "./runtime.js";
+import { InfoflowWSReceiver } from "./ws-receiver.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -16,7 +17,6 @@ import { getInfoflowRuntime } from "./runtime.js";
 export type InfoflowMonitorOptions = {
   account: ResolvedInfoflowAccount;
   config: OpenClawConfig;
-  runtime: unknown;
   abortSignal: AbortSignal;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
@@ -79,7 +79,7 @@ function isInfoflowPath(requestPath: string): boolean {
 /**
  * Handles incoming Infoflow webhook HTTP requests.
  *
- * - Routes by path to registered targets (supports exact and suffix match).
+ * - Routes by path to registered targets (exact match).
  * - Only allows POST.
  * - Delegates body reading, echostr verification, authentication,
  *   and message dispatch to infoflow_req_parse.
@@ -166,4 +166,23 @@ export async function startInfoflowMonitor(options: InfoflowMonitorOptions): Pro
   });
 
   return unregister;
+}
+
+/** Starts a WebSocket message receiver and returns a stop function. */
+export async function startInfoflowWSMonitor(options: InfoflowMonitorOptions): Promise<() => void> {
+  const receiver = new InfoflowWSReceiver({
+    account: options.account,
+    config: options.config,
+    abortSignal: options.abortSignal,
+    statusSink: options.statusSink,
+  });
+
+  try {
+    await receiver.start();
+  } catch (err) {
+    receiver.stop();
+    throw err;
+  }
+
+  return () => receiver.stop();
 }

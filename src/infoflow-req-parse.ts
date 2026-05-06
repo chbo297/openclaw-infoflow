@@ -1,7 +1,7 @@
 import { createHash, createDecipheriv, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { createDedupeCache } from "openclaw/plugin-sdk";
+import { createDedupeCache } from "openclaw/plugin-sdk/core";
 // ---------------------------------------------------------------------------
 // Message deduplication
 // ---------------------------------------------------------------------------
@@ -98,7 +98,7 @@ function extractDedupeKey(msgData: Record<string, unknown>): string | null {
  * Returns true if the message is a duplicate (already seen within TTL).
  * Uses shared dedupe cache implementation.
  */
-function isDuplicateMessage(msgData: Record<string, unknown>): boolean {
+export function isDuplicateMessage(msgData: Record<string, unknown>): boolean {
   const key = extractDedupeKey(msgData);
   if (!key) return false; // Cannot extract key, allow through
 

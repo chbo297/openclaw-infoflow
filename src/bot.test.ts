@@ -96,6 +96,18 @@ describe("checkBotMentioned", () => {
     expect(checkBotMentioned([{ type: "AT", name: "MyBotHelper" }], "MyBot")).toBe(false);
     expect(checkBotMentioned([{ type: "AT", name: "Bot" }], "MyBot")).toBe(false);
   });
+
+  it("matches by appAgentId vs AT robotid when robotName is absent", () => {
+    const bodyItems = [{ type: "AT", robotid: 123 }];
+    expect(checkBotMentioned(bodyItems, { appAgentId: 123 })).toBe(true);
+    expect(checkBotMentioned(bodyItems, { appAgentId: 999 })).toBe(false);
+  });
+
+  it("matches by robotId vs AT robotid", () => {
+    const bodyItems = [{ type: "AT", robotid: 42 }];
+    expect(checkBotMentioned(bodyItems, { robotId: "42" })).toBe(true);
+    expect(checkBotMentioned(bodyItems, { robotId: "99" })).toBe(false);
+  });
 });
 
 describe("checkWatchMentioned", () => {

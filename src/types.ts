@@ -10,6 +10,9 @@ export type InfoflowDmPolicy = "open" | "pairing" | "allowlist";
 export type InfoflowGroupPolicy = "open" | "allowlist" | "disabled";
 export type InfoflowChatType = "direct" | "group";
 
+/** Inbound message transport: webhook (Infoflow POSTs to your server) or websocket (plugin connects to gateway). */
+export type InfoflowConnectionMode = "webhook" | "websocket";
+
 /** Reply mode controlling bot behavior per group */
 export type InfoflowReplyMode =
   | "ignore"
@@ -101,6 +104,11 @@ export type InfoflowAccountConfig = {
   enabled?: boolean;
   name?: string;
   apiHost?: string;
+  connectionMode?: InfoflowConnectionMode;
+  /** WebSocket gateway host (websocket mode). */
+  wsGateway?: string;
+  /** Override WebSocket handshake host (optional, intranet). */
+  wsConnectDomain?: string;
   checkToken?: string;
   encodingAESKey?: string;
   appKey?: string;
@@ -142,6 +150,9 @@ export type ResolvedInfoflowAccount = {
     enabled?: boolean;
     name?: string;
     apiHost: string;
+    connectionMode: InfoflowConnectionMode;
+    wsGateway: string;
+    wsConnectDomain?: string;
     checkToken: string;
     encodingAESKey: string;
     appKey: string;

@@ -26,7 +26,8 @@ vi.mock("./runtime.js", () => ({
   })),
 }));
 
-vi.mock("openclaw/plugin-sdk", () => ({
+// (2026.5.4) createReplyPrefixOptions is exported from openclaw/plugin-sdk root
+vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
   createReplyPrefixOptions: vi.fn(() => ({
     onModelSelected: vi.fn(),
     responsePrefix: undefined,

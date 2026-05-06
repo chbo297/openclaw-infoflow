@@ -12,6 +12,21 @@
       "encodingAESKey": { "type": "string" },
       "appKey": { "type": "string" },
       "appSecret": { "type": "string" },
+      "connectionMode": {
+        "type": "string",
+        "enum": ["webhook", "websocket"],
+        "default": "webhook",
+        "description": "消息接收模式：webhook（默认）或 websocket"
+      },
+      "wsGateway": {
+        "type": "string",
+        "default": "infoflow-open-gateway.weiyun.baidu.com",
+        "description": "WebSocket 网关域名，仅 websocket 模式使用"
+      },
+      "wsConnectDomain": {
+        "type": "string",
+        "description": "WebSocket 连接域名，用于实际 WS 握手（不填则使用服务端返回的地址，内网环境可配置此项）"
+      },
       "robotName": { "type": "string" },
       "robotId": {
         "type": "string",
@@ -64,6 +79,21 @@
             "encodingAESKey": { "type": "string" },
             "appKey": { "type": "string" },
             "appSecret": { "type": "string" },
+            "connectionMode": {
+              "type": "string",
+              "enum": ["webhook", "websocket"],
+              "default": "webhook",
+              "description": "消息接收模式：webhook（默认）或 websocket"
+            },
+            "wsGateway": {
+              "type": "string",
+              "default": "infoflow-open-gateway.weiyun.baidu.com",
+              "description": "WebSocket 网关域名，仅 websocket 模式使用"
+            },
+            "wsConnectDomain": {
+              "type": "string",
+              "description": "WebSocket 连接域名，用于实际 WS 握手（不填则使用服务端返回的地址，内网环境可配置此项）"
+            },
             "robotName": { "type": "string" },
             "robotId": {
               "type": "string",
@@ -108,6 +138,170 @@
         }
       },
       "defaultAccount": { "type": "string" }
+    }
+  },
+  "channelConfigs": {
+    "infoflow": {
+      "label": "Infoflow",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiHost": { "type": "string" },
+          "enabled": { "type": "boolean" },
+          "name": { "type": "string" },
+          "checkToken": { "type": "string" },
+          "encodingAESKey": { "type": "string" },
+          "appKey": { "type": "string" },
+          "appSecret": { "type": "string" },
+          "connectionMode": {
+            "type": "string",
+            "enum": ["webhook", "websocket"],
+            "default": "webhook",
+            "description": "消息接收模式：webhook（默认）或 websocket"
+          },
+          "wsGateway": {
+            "type": "string",
+            "default": "infoflow-open-gateway.weiyun.baidu.com",
+            "description": "WebSocket 网关域名，仅 websocket 模式使用"
+          },
+          "wsConnectDomain": {
+            "type": "string",
+            "description": "WebSocket 连接域名，用于实际 WS 握手（不填则使用服务端返回的地址，内网环境可配置此项）"
+          },
+          "robotName": { "type": "string" },
+          "robotId": {
+            "type": "string",
+            "description": "不用填，该字段自动生成，用来兼容如流服务的某些特性，是如流机器人实际id（根据robotName在收到@时自动发现，用于忽略自己发出的消息）"
+          },
+          "appAgentId": {
+            "type": "number",
+            "description": "如流企业后台的应用ID，私聊消息撤回依赖此字段"
+          },
+          "dmPolicy": { "type": "string", "enum": ["open", "pairing", "allowlist"] },
+          "allowFrom": { "type": "array", "items": { "type": "string" } },
+          "groupPolicy": { "type": "string", "enum": ["open", "allowlist", "disabled"] },
+          "groupAllowFrom": { "type": "array", "items": { "type": "string" } },
+          "requireMention": { "type": "boolean" },
+          "replyMode": {
+            "type": "string",
+            "enum": ["ignore", "record", "mention-only", "mention-and-watch", "proactive"],
+            "default": "mention-and-watch"
+          },
+          "followUp": { "type": "boolean", "default": true },
+          "followUpWindow": { "type": "number", "default": 300 },
+          "watchMentions": { "type": "array", "items": { "type": "string" } },
+          "watchRegex": { "type": "array", "items": { "type": "string" } },
+          "groups": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "replyMode": {
+                  "type": "string",
+                  "enum": ["ignore", "record", "mention-only", "mention-and-watch", "proactive"]
+                },
+                "watchMentions": { "type": "array", "items": { "type": "string" } },
+                "watchRegex": { "type": "array", "items": { "type": "string" } },
+                "followUp": { "type": "boolean" },
+                "followUpWindow": { "type": "number" },
+                "systemPrompt": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "name": { "type": "string" },
+                "checkToken": { "type": "string" },
+                "encodingAESKey": { "type": "string" },
+                "appKey": { "type": "string" },
+                "appSecret": { "type": "string" },
+                "connectionMode": {
+                  "type": "string",
+                  "enum": ["webhook", "websocket"],
+                  "default": "webhook",
+                  "description": "消息接收模式：webhook（默认）或 websocket"
+                },
+                "wsGateway": {
+                  "type": "string",
+                  "default": "infoflow-open-gateway.weiyun.baidu.com",
+                  "description": "WebSocket 网关域名，仅 websocket 模式使用"
+                },
+                "wsConnectDomain": {
+                  "type": "string",
+                  "description": "WebSocket 连接域名，用于实际 WS 握手（不填则使用服务端返回的地址，内网环境可配置此项）"
+                },
+                "robotName": { "type": "string" },
+                "robotId": {
+                  "type": "string",
+                  "description": "不用填，该字段自动生成，用来兼容如流服务的某些特性，是如流机器人实际id（根据robotName在收到@时自动发现，用于忽略自己发出的消息）"
+                },
+                "appAgentId": {
+                  "type": "number",
+                  "description": "如流企业后台的应用ID，私聊消息撤回依赖此字段"
+                },
+                "dmPolicy": { "type": "string", "enum": ["open", "pairing", "allowlist"] },
+                "allowFrom": { "type": "array", "items": { "type": "string" } },
+                "groupPolicy": { "type": "string", "enum": ["open", "allowlist", "disabled"] },
+                "groupAllowFrom": { "type": "array", "items": { "type": "string" } },
+                "requireMention": { "type": "boolean" },
+                "replyMode": {
+                  "type": "string",
+                  "enum": ["ignore", "record", "mention-only", "mention-and-watch", "proactive"]
+                },
+                "followUp": { "type": "boolean" },
+                "followUpWindow": { "type": "number" },
+                "watchMentions": { "type": "array", "items": { "type": "string" } },
+                "watchRegex": { "type": "array", "items": { "type": "string" } },
+                "groups": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "replyMode": {
+                        "type": "string",
+                        "enum": ["ignore", "record", "mention-only", "mention-and-watch", "proactive"]
+                      },
+                      "watchMentions": { "type": "array", "items": { "type": "string" } },
+                      "watchRegex": { "type": "array", "items": { "type": "string" } },
+                      "followUp": { "type": "boolean" },
+                      "followUpWindow": { "type": "number" },
+                      "systemPrompt": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          },
+          "defaultAccount": { "type": "string" }
+        }
+      },
+      "uiHints": {
+        "channels.infoflow.connectionMode": {
+          "help": "推荐默认 webhook；仅在企业网络/网关可达性受限时切换到 websocket。"
+        },
+        "channels.infoflow.wsGateway": {
+          "help": "仅 connectionMode=websocket 时生效。通常保持默认网关域名。"
+        },
+        "channels.infoflow.wsConnectDomain": {
+          "help": "可选。用于内网或专线环境覆盖 WS 实际握手域名。"
+        },
+        "channels.infoflow.appAgentId": {
+          "help": "用于私聊消息撤回（delete）。请填写如流后台应用ID。"
+        },
+        "channels.infoflow.allowFrom": {
+          "help": "dmPolicy=allowlist 时生效；建议使用 infoflow: 前缀标识来源。"
+        },
+        "channels.infoflow.groupAllowFrom": {
+          "help": "groupPolicy=allowlist 时生效；限制可触发群消息处理的来源。"
+        }
+      }
     }
   }
 }
