@@ -1,9 +1,12 @@
 {
   "name": "@chbo297/infoflow",
-  "version": "2026.5.4",
+  "version": "2026.5.5",
   "description": "OpenClaw Infoflow (如流) channel plugin for Baidu enterprise messaging",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "infoflow-openclaw": "dist/src/cli.js"
+  },
   "license": "MIT",
   "keywords": [
     "openclaw",
@@ -29,7 +32,7 @@
   },
   "openclaw": {
     "extensions": [
-      "./index.ts"
+      "./dist/index.js"
     ],
     "channel": {
       "id": "infoflow",
@@ -52,5 +55,12 @@
   "devDependencies": {
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
-  }
+  },
+  "files": [
+    "dist/**",
+    "openclaw.plugin.json",
+    "scripts/deploy.sh",
+    "scripts/lib/**",
+    "README.md"
+  ]
 }
