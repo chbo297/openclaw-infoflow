@@ -41,4 +41,3 @@ BAIDU_NPM_REGISTRY=http://registry.npm.baidu-int.com bash scripts/deploy.sh
 
 当 `connectionMode="websocket"` 时，插件会动态 `import("@baidu/infoflow-sdk-nodejs")`。
 该依赖在 `peerDependencies` 中标记为 optional：不使用 websocket 模式时无需安装。
-
