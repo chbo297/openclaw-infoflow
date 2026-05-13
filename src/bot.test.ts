@@ -11,7 +11,18 @@ import {
   _extractMentionIds as extractMentionIds,
   _checkWatchRegex as checkWatchRegex,
   _checkReplyToBot as checkReplyToBot,
+  _buildGroupOutputHygienePrompt as buildGroupOutputHygienePrompt,
 } from "./bot.js";
+
+describe("buildGroupOutputHygienePrompt", () => {
+  it("requires conclusion-style group output, subagent for multi-step, and no raw tool dumps", () => {
+    const s = buildGroupOutputHygienePrompt();
+    expect(s).toContain("# Group chat output");
+    expect(s).toContain("subagent");
+    expect(s).toMatch(/tool-call|tool call/i);
+    expect(s).toMatch(/retrieval|search/i);
+  });
+});
 
 describe("checkBotMentioned", () => {
   // Case 1: Missing robotName should return false

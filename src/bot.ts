@@ -432,6 +432,22 @@ function buildProactivePrompt(): string {
   ].join("\n");
 }
 
+/**
+ * Appended last to every group-chat GroupSystemPrompt. Keeps the visible group reply
+ * conclusion-oriented: no raw tool transcripts or retrieval dumps; multi-step work
+ * stays in subagent (or equivalent) with only a synthesized answer to the group.
+ */
+function buildGroupOutputHygienePrompt(): string {
+  return [
+    "# Group chat output (hard constraint)",
+    "",
+    "- Reply to the group with **only the final user-facing answer** in one concise message (or a few short messages if the channel requires splitting).",
+    "- **Do not** include tool-call traces, raw intermediate search/retrieval payloads, or long scratchpad-style reasoning in the group-visible text.",
+    "- If the task needs exploration across multiple steps, do that work in a **subagent** (or equivalent isolated context) and return **only** the merged conclusion to the group.",
+    "- If the user explicitly asks for your reasoning or steps, satisfy that with a **brief** numbered or bulleted summary **inside the same** conclusion-style reply — still **not** raw tool logs or full intermediate dumps.",
+  ].join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Group reply tracking (in-memory) for follow-up window
 // ---------------------------------------------------------------------------
@@ -1143,6 +1159,13 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
         ? `${existing}\n\n---\n\n${groupCfg.systemPrompt}`
         : groupCfg.systemPrompt;
     }
+
+    // Default output hygiene for every dispatched group message (always last)
+    const hygiene = buildGroupOutputHygienePrompt();
+    const beforeHygiene = ctxPayload.GroupSystemPrompt ?? "";
+    ctxPayload.GroupSystemPrompt = beforeHygiene
+      ? `${beforeHygiene}\n\n---\n\n${hygiene}`
+      : hygiene;
   }
 
   // Build unified target: "group:<id>" for group chat, username for private chat
@@ -1243,3 +1266,6 @@ export const _checkWatchRegex = checkWatchRegex;
 
 /** @internal — Check if message is a reply to one of the bot's own messages. Only exported for tests. */
 export const _checkReplyToBot = checkReplyToBot;
+
+/** @internal — Group output hygiene fragment appended to GroupSystemPrompt. Only exported for tests. */
+export const _buildGroupOutputHygienePrompt = buildGroupOutputHygienePrompt;

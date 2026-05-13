@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026.5.8
+
+### 优化
+
+#### 群聊默认输出卫生（GroupSystemPrompt）
+
+- 所有实际下发到 LLM 的群聊消息，在 `GroupSystemPrompt` **末尾**统一追加一段固定规则：对群只发最终用户可见结论；不贴工具调用轨迹、原始检索中间结果；多步探索用 subagent（或等价隔离）完成后只返回合并结论。用户若明确要求「过程」，以同条回复内的简短步骤摘要满足，仍不贴原始工具日志。
+- 该段落在各群 `systemPrompt` 配置合并**之后**追加，避免配置侧无意弱化上述约束。
+
+#### 发版维护
+
+- 新增 `scripts/sync-readme-install-version.mjs` 与 `npm run sync-readme-install-version`，按 `package.json` 的 `version` 重写 README 中带标记的安装示例与发版命令块，减少文档与 npm 版本不一致。
+
+---
+
 ## 2026.5.7
 
 ### 优化
