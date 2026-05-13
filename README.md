@@ -136,17 +136,25 @@ curl -s https://registry.npmjs.org/@chbo297/infoflow/<要装的版本> | head -5
 
 ### 版本升级、打 tag、推送与 npm 发布流程
 
-每次发布新版本时，先把 `package.json` 的 `version` 设为待发版本号，再按下面顺序执行。`sync` 脚本会：
+正式版与 Beta 预发各自有完整流程，区别只在 **`npm version` 用的版本号** 和 **`npm publish` 是否带 `--tag beta`** 两处。请按需选择对应小节，从头到尾执行。
 
-- 把"发版流程"代码块内的版本号、`git tag`、`git commit -m` 等同步成当前 `package.json` 的版本（"current" stream）；
-- 同时把上文"首次安装"段落里 `:latest` / `:beta` 两个 stream 的标记区按 npm 上的 dist-tag 刷新——若当前正在发的是 stable 版本，`:latest` 标记区会同步写成新版本号；若是 prerelease，`:beta` 标记区会同步写成新版本号。
+执行 `npm run sync-readme-install-version` 时脚本会：
 
-<!-- sync:infoflow-plugin-version -->
+- 把"发版流程"代码块内 `--version` / `npm version` / `git tag` / `git commit -m "<version>"` 等示例同步到当前 `package.json.version`（"current" stream）；
+- 同时把上文"首次安装"段落里 `:latest` / `:beta` 两个 marker 区按 npm 上的 dist-tag 刷新——发 stable 时 `:latest` 区会写成新版本号；发 prerelease 时 `:beta` 区会写成新版本号；另一条 stream 通过 npm registry 接口拉取真实 dist-tag。
+
+#### A. 正式版（stable）发布流程
+
+发布一个不带预发后缀的版本（例如 `2026.5.10`），会同时占用 npm 的 `latest` dist-tag，是 `npx` 默认拉取的版本。
+
+将下方所有 `<X.Y.Z>` 替换为目标正式版本号（不带 `-beta.N`）：
+
 ```bash
 # 1) 修改版本号（会同步 package-lock.json）
-npm version 2026.5.9-beta.1 --no-git-tag-version
+npm version <X.Y.Z> --no-git-tag-version
 
-# 2) 同步 README：current/latest/beta 三个标记区一起刷新（latest/beta 会从 npm 拉真实 dist-tag）
+# 2) 同步 README：current 区写入 <X.Y.Z>；:latest 区也写入 <X.Y.Z>（因为本次发的就是新 latest）；
+#                 :beta 区从 npm 拉取当前 beta dist-tag 保持不变
 npm run sync-readme-install-version
 
 # 3) 编辑 CHANGELOG.md 顶部，添加本版本章节
@@ -158,23 +166,72 @@ npm run build
 
 # 5) 提交版本变更
 git add package.json package-lock.json README.md CHANGELOG.md scripts src
-git commit -m "2026.5.9-beta.1"
+git commit -m "<X.Y.Z>"
 
 # 6) 打 tag 并推送代码与 tag
-git tag 2026.5.9-beta.1
+git tag <X.Y.Z>
 git push origin main
-git push origin 2026.5.9-beta.1
+git push origin <X.Y.Z>
 
-# 7) 发布到 npm
-#    - Beta 预发（不占用 latest dist-tag）：
-npm publish --tag beta --registry https://registry.npmjs.org
-#    - 正式版（同时占用 latest）：
-# npm publish --registry https://registry.npmjs.org
+# 7) 发布到 npm（占用 latest dist-tag）
+npm publish --registry https://registry.npmjs.org
 
-# 8) 发布成功后再跑一次 sync，把 README 的 :latest / :beta 标记区刷新到 npm 最新 dist-tag，并提交
+# 8) 发布成功后再跑一次 sync，把 :latest 区刷新成 npm registry 真实状态（通常已经一致，
+#    但若另一条 stream 在期间也有新发布，这一步会顺带更新），并补一个 docs 提交
 npm run sync-readme-install-version
-git add README.md && git commit -m "docs: refresh README install commands" || true
-git push origin main || true
+git add README.md && git diff --cached --quiet || git commit -m "docs: refresh README install commands"
+git push origin main
+```
+
+#### B. Beta 预发布流程
+
+发布一个带预发后缀的版本（例如 `2026.5.10-beta.1`），通过 `--tag beta` 占用 `beta` dist-tag，**不会**改写 `latest`，默认 `npx` 装到的仍是正式版。
+
+将下方所有 `<X.Y.Z-beta.N>` 替换为目标预发版本号：
+
+```bash
+# 1) 修改版本号（会同步 package-lock.json）
+npm version <X.Y.Z-beta.N> --no-git-tag-version
+
+# 2) 同步 README：current 区写入 <X.Y.Z-beta.N>；:beta 区也写入 <X.Y.Z-beta.N>（因为本次发的就是新 beta）；
+#                 :latest 区从 npm 拉取当前 latest dist-tag 保持不变
+npm run sync-readme-install-version
+
+# 3) 编辑 CHANGELOG.md 顶部，添加本版本章节
+
+# 4) 发布前校验
+npm run typecheck
+npm run test
+npm run build
+
+# 5) 提交版本变更
+git add package.json package-lock.json README.md CHANGELOG.md scripts src
+git commit -m "<X.Y.Z-beta.N>"
+
+# 6) 打 tag 并推送代码与 tag
+git tag <X.Y.Z-beta.N>
+git push origin main
+git push origin <X.Y.Z-beta.N>
+
+# 7) 发布到 npm（占用 beta dist-tag；不影响 latest）
+npm publish --tag beta --registry https://registry.npmjs.org
+
+# 8) 发布成功后再跑一次 sync 并补一个 docs 提交（同 A.8）
+npm run sync-readme-install-version
+git add README.md && git diff --cached --quiet || git commit -m "docs: refresh README install commands"
+git push origin main
+```
+
+#### 当前 `package.json` 的版本号示例
+
+以下示例由 `sync` 脚本自动维护，反映**仓库当前 `package.json.version`**（可作为复制 A / B 流程时的版本号参考）：
+
+<!-- sync:infoflow-plugin-version -->
+```bash
+npm version 2026.5.9-beta.1 --no-git-tag-version
+git commit -m "2026.5.9-beta.1"
+git tag 2026.5.9-beta.1
+git push origin 2026.5.9-beta.1
 ```
 <!-- /sync:infoflow-plugin-version -->
 
