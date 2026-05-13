@@ -29,6 +29,9 @@ export type InboundContextRecord = {
     preview: string;
     isBotMessage: boolean;
   }>;
+  /** Plain inbound body text seen by the agent — used by the action handler to
+   *  distinguish "recall the latest one" semantics from a specific reference. */
+  inboundBody?: string;
   registeredAt: number;
 };
 

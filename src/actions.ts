@@ -11,6 +11,7 @@ import type {
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { resolveInfoflowAccount } from "./accounts.js";
+import { looksLikeRecallLatest } from "./recall-intent.js";
 import { lookupInboundContext } from "./inbound-context.js";
 import { logVerbose } from "./logging.js";
 import { prepareInfoflowImageBase64, sendInfoflowImageMessage } from "./media.js";
@@ -53,8 +54,67 @@ function resolveInboundReplyToMessageId(params: {
   // Scope match: same account + target (avoid using a stale context from another chat).
   if (ctx.accountId !== params.accountId) return undefined;
   if (ctx.target !== params.target) return undefined;
-  return ctx.replyToMessageId;
 }
+
+/**
+ * Aggressive guard: when LLM passes messageId === inbound currentMessageId (a known
+ * confusion pattern), auto-correct based on context instead of failing.
+ *
+ * Priorities:
+ * 1) Use replyToMessageId — user quote-replied to a bot message (highest confidence).
+ * 2) Drop to count=1 mode — when no replyTo AND text indicates "recall latest one".
+ * 3) Defer to existing fallback chain — ambiguous intent (e.g., "recall the one about X").
+ *
+ * Returns the corrected messageId (or undefined to signal count=1 mode).
+ */
+function applyAggressiveGuardForInboundMessageId(params: {
+  messageId: string;
+  currentMessageId: string | number | undefined;
+  accountId: string;
+  target: string;
+}): string | undefined {
+  const inboundMsgId =
+    params.currentMessageId != null ? String(params.currentMessageId) : undefined;
+
+  // Guard only triggers when LLM passes the inbound message id as delete target
+  if (!inboundMsgId || params.messageId !== inboundMsgId) {
+    return params.messageId;
+  }
+
+  const ctxRec = lookupInboundContext(inboundMsgId);
+  const scopeOk =
+    ctxRec && ctxRec.accountId === params.accountId && ctxRec.target === params.target;
+
+  if (!scopeOk) {
+    // No inbound context to guide correction — defer to existing fallback chain
+    return params.messageId;
+  }
+
+  // Priority 1: replyToMessageId (user quote-replied to a bot message)
+  const replyToId = ctxRec.replyToMessageId;
+  if (replyToId && findSentMessage(params.accountId, replyToId)) {
+    logVerbose(
+      `[infoflow:delete] aggressive: messageId==inboundMsgId(${params.messageId}); using replyTo=${replyToId}`,
+    );
+    return replyToId;
+  }
+
+  // Priority 2: text indicates "recall latest one" — safe to auto-correct to count=1
+  if (looksLikeRecallLatest(ctxRec.inboundBody ?? "")) {
+    logVerbose(
+      `[infoflow:delete] aggressive: messageId==inboundMsgId(${params.messageId}); recall-latest intent → drop to count=1`,
+    );
+    return undefined; // undefined → count=1 mode
+  }
+
+  // Priority 3: ambiguous intent — defer to existing fallback chain
+  logVerbose(
+    `[infoflow:delete] aggressive: messageId==inboundMsgId(${params.messageId}); ambiguous intent → defer to candidate-error path`,
+  );
+  return params.messageId;
+}
+
+
 
 /** Format up to N recent sent messages for an error-path hint to the LLM. */
 function formatRecentCandidatesForError(records: SentMessageRecord[], limit = 5): string {
@@ -100,7 +160,7 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
         throw new Error("Infoflow appKey/appSecret not configured.");
       }
 
-      const messageId = readStringParam(params, "messageId");
+      let messageId = readStringParam(params, "messageId");
       // Default to count=1 (recall latest message) when neither messageId nor count is provided
       const countStr = readStringParam(params, "count") ?? (messageId ? undefined : "1");
 
@@ -111,6 +171,16 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
         // 群消息撤回
         // -----------------------------------------------------------------
         const groupId = Number(groupMatch[1]);
+        const targetForStore = `group:${groupId}`;
+        // Apply aggressive guard when messageId equals inbound currentMessageId (LLM confusion pattern)
+        if (messageId) {
+          messageId = applyAggressiveGuardForInboundMessageId({
+            messageId,
+            currentMessageId: toolContext?.currentMessageId,
+            accountId: account.accountId,
+            target: targetForStore,
+          });
+        }
 
         // Mode A: single message recall by messageId
         if (messageId) {
@@ -125,7 +195,7 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
           if (!stored && !msgseqid) {
             const fallbackId = resolveInboundReplyToMessageId({
               accountId: account.accountId,
-              target: `group:${groupId}`,
+              target: targetForStore,
               currentMessageId: toolContext?.currentMessageId,
             });
             if (fallbackId && fallbackId !== effectiveMessageId) {
@@ -191,7 +261,7 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
           }
 
           const records = querySentMessages(account.accountId, {
-            target: `group:${groupId}`,
+            target: targetForStore,
             count,
           });
           // Filter to records that have msgseqid (required for group recall)
@@ -270,6 +340,16 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
             "Infoflow private message recall requires appAgentId configuration. " +
               "Set channels.infoflow.appAgentId to your application ID (如流企业后台的应用ID).",
           );
+        }
+
+        // Apply aggressive guard when messageId equals inbound currentMessageId (LLM confusion pattern)
+        if (messageId) {
+          messageId = applyAggressiveGuardForInboundMessageId({
+            messageId,
+            currentMessageId: toolContext?.currentMessageId,
+            accountId: account.accountId,
+            target,
+          });
         }
 
         // Mode A: single message recall by messageId (msgkey)

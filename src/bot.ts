@@ -13,6 +13,7 @@ import { resolveInfoflowAccount } from "./accounts.js";
 import { registerInboundContext } from "./inbound-context.js";
 import { getInfoflowBotLog, formatInfoflowError, logVerbose } from "./logging.js";
 import { createInfoflowReplyDispatcher } from "./reply-dispatcher.js";
+import { looksLikeRecallIntent, looksLikeRecallLatest } from "./recall-intent.js";
 import { getInfoflowRuntime } from "./runtime.js";
 import { findSentMessage, querySentMessages } from "./sent-message-store.js";
 import type {
@@ -314,14 +315,7 @@ function resolveReplyTargets(
 // keyed by target, so a single push surfaces messages sent from any session.
 // ---------------------------------------------------------------------------
 
-/** Detect inbound text that semantically asks the bot to recall/delete messages. */
-const RECALL_INTENT_REGEX =
-  /(撤回|收回|删[掉了除]|取消|清除|recall|unsend|undo\s*send|delete\s+(?:that|those|the\s+(?:last|previous(?:\s+\d+)?)))/i;
-
-function looksLikeRecallIntent(text: string): boolean {
-  if (!text) return false;
-  return RECALL_INTENT_REGEX.test(text);
-}
+// Recall-intent detection lives in ./recall-intent.js — shared with actions.ts.
 
 const RECENT_BOT_AMBIENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RECENT_BOT_AMBIENT_COUNT = 5;
@@ -1132,10 +1126,11 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
   }
 
   // Register inbound context so the delete action handler can fall back to the
-  // bot-message id the inbound is quote-replying to (when present) — only used
-  // when the LLM otherwise passes an unknown id. We intentionally only pick a
-  // bot-sent reply target: falling back to a non-bot reply id would never help
-  // (it can't be in sent-messages.db) and only adds noise.
+  // bot-message id the inbound is quote-replying to (when present), or detect
+  // the "messageId===inboundMessageId" LLM confusion pattern with the body
+  // text to decide whether it's safe to auto-correct to count=1. We only pick
+  // a bot-sent reply target: falling back to a non-bot reply id would never
+  // help (it can't be in sent-messages.db) and only adds noise.
   if (event.messageId) {
     registerInboundContext({
       accountId,
@@ -1143,6 +1138,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
       inboundMessageId: event.messageId,
       replyToMessageId: event.replyTargets?.find((t) => t.isBotMessage)?.messageid,
       replyTargets: event.replyTargets,
+      inboundBody: bodyForAgent || mes || event.replyContext?.join(" "),
       registeredAt: Date.now(),
     });
   }
@@ -1448,6 +1444,9 @@ export const _buildGroupOutputHygienePrompt = buildGroupOutputHygienePrompt;
 
 /** @internal — Recall intent regex. Only exported for tests. */
 export const _looksLikeRecallIntent = looksLikeRecallIntent;
+
+/** @internal — Stricter recall-latest detector. Only exported for tests. */
+export const _looksLikeRecallLatest = looksLikeRecallLatest;
 
 /** @internal — Sent-messages section builder. Only exported for tests. */
 export const _buildBotRecentMessagesSection = buildBotRecentMessagesSection;
