@@ -39,35 +39,49 @@ BAIDU_NPM_REGISTRY=http://registry.npm.baidu-int.com bash scripts/deploy.sh
 
 ### 首次安装（推荐命令）
 
-首次在机器上安装时，推荐使用以下两种方式。
+下面的安装命令块由 `npm run sync-readme-install-version` 自动维护，版本号始终与 npm 上当前的 `latest` / `beta` dist-tag 保持一致，请直接复制使用。
 
-方式 A：通过独立 tools 包安装并部署（推荐，支持 `update` 子命令）
+#### 方式 A：通过独立 tools 包安装并部署（推荐，支持 `update` 子命令）
 
-<!-- sync:infoflow-plugin-version -->
+正式版（`latest` dist-tag）：
+
+<!-- sync:infoflow-plugin-version:latest -->
 ```bash
-# 正式版（latest）
-npx -y @chbo297/infoflow-openclaw-tools update --version 2026.5.9-beta.1 --registry https://registry.npmjs.org
+npm cache clean --force
+npx -y --prefer-online @chbo297/infoflow-openclaw-tools update \
+  --version 2026.5.8 --registry https://registry.npmjs.org
 ```
-<!-- /sync:infoflow-plugin-version -->
+<!-- /sync:infoflow-plugin-version:latest -->
 
+Beta 版（`beta` dist-tag，按需）：
+
+<!-- sync:infoflow-plugin-version:beta -->
 ```bash
-# Beta 版（示例，版本号请按实际预发包替换）
-npx -y @chbo297/infoflow-openclaw-tools@beta update --version 2026.5.8-beta.1 --registry https://registry.npmjs.org
+npm cache clean --force
+npx -y --prefer-online @chbo297/infoflow-openclaw-tools@beta update \
+  --version 2026.5.9-beta.1 --registry https://registry.npmjs.org
 ```
+<!-- /sync:infoflow-plugin-version:beta -->
 
-方式 B：通过 OpenClaw 插件命令安装
+> 加上 `npm cache clean --force` 和 `--prefer-online`，可避免本机 npm metadata 缓存尚未刷新而看不到刚发布版本（典型表现为 `ETARGET: No matching version found`）。
 
-<!-- sync:infoflow-plugin-version -->
+#### 方式 B：通过 OpenClaw 插件命令安装
+
+正式版：
+
+<!-- sync:infoflow-plugin-version:latest -->
 ```bash
-# 正式版
+openclaw plugins install @chbo297/infoflow@2026.5.8
+```
+<!-- /sync:infoflow-plugin-version:latest -->
+
+Beta 版：
+
+<!-- sync:infoflow-plugin-version:beta -->
+```bash
 openclaw plugins install @chbo297/infoflow@2026.5.9-beta.1
 ```
-<!-- /sync:infoflow-plugin-version -->
-
-```bash
-# Beta 版（示例，版本号请按实际预发包替换）
-openclaw plugins install @chbo297/infoflow@2026.5.8-beta.1
-```
+<!-- /sync:infoflow-plugin-version:beta -->
 
 安装后建议检查插件状态：
 
@@ -76,17 +90,32 @@ openclaw plugins list
 openclaw plugins inspect infoflow
 ```
 
-### 通过 npx 一键更新安装
+#### 如遇 `ETARGET: No matching version found`
 
-发布到 npm 后，可直接通过独立 tools 包执行安装/升级：
+刚发布的版本可能在本机 npm metadata 缓存里看不到，按下面顺序排查：
 
-<!-- sync:infoflow-plugin-version -->
 ```bash
-npx -y @chbo297/infoflow-openclaw-tools update --version 2026.5.9-beta.1 --registry https://registry.npmjs.org
-```
-<!-- /sync:infoflow-plugin-version -->
+# 1) 强制清缓存 + 在线拉取最新元数据
+npm cache clean --force
+npx -y --prefer-online @chbo297/infoflow-openclaw-tools@beta update \
+  --version <要装的版本> --registry https://registry.npmjs.org
 
-常用参数：
+# 2) 直接查 registry，确认版本确实可见
+npm view @chbo297/infoflow versions --registry https://registry.npmjs.org
+
+# 3) 确认默认 registry 未被改到镜像源（有些内网会重写到 cnpm/baidu 镜像，那里同步可能滞后）
+npm config get registry            # 期望: https://registry.npmjs.org/
+# 临时强制覆盖（不改全局配置）：
+npm_config_registry=https://registry.npmjs.org \
+  npx -y --prefer-online @chbo297/infoflow-openclaw-tools@beta update \
+  --version <要装的版本> --registry https://registry.npmjs.org
+
+# 4) 直接 curl 验证那台机器能否拿到 manifest
+curl -sI https://registry.npmjs.org/@chbo297/infoflow | head -5
+curl -s https://registry.npmjs.org/@chbo297/infoflow/<要装的版本> | head -50
+```
+
+### tools 包的常用参数
 
 - `--version <version>`: 指定安装版本（默认 `latest`）
 - `--registry <url>`: 插件包下载源（默认 `https://registry.npmjs.org`）
@@ -107,34 +136,45 @@ npx -y @chbo297/infoflow-openclaw-tools update --version 2026.5.9-beta.1 --regis
 
 ### 版本升级、打 tag、推送与 npm 发布流程
 
-每次发布新版本时，先将 `package.json` 的 `version` 设为待发版本号，再按下述顺序执行。上文「首次安装 / npx 更新」与下文发版流程中，各 bash 代码块外侧有一对用于自动替换的 HTML 注释标记；发版前请执行 **`npm run sync-readme-install-version`**，脚本会按当前 `package.json` 的 `version` 更新这些块内的版本号，以免 README 与 npm 不一致。
+每次发布新版本时，先把 `package.json` 的 `version` 设为待发版本号，再按下面顺序执行。`sync` 脚本会：
+
+- 把"发版流程"代码块内的版本号、`git tag`、`git commit -m` 等同步成当前 `package.json` 的版本（"current" stream）；
+- 同时把上文"首次安装"段落里 `:latest` / `:beta` 两个 stream 的标记区按 npm 上的 dist-tag 刷新——若当前正在发的是 stable 版本，`:latest` 标记区会同步写成新版本号；若是 prerelease，`:beta` 标记区会同步写成新版本号。
 
 <!-- sync:infoflow-plugin-version -->
 ```bash
 # 1) 修改版本号（会同步 package-lock.json）
 npm version 2026.5.9-beta.1 --no-git-tag-version
 
-# 2) 同步 README 中标记块内的推荐安装命令与下文中的 tag / commit 示例版本号
+# 2) 同步 README：current/latest/beta 三个标记区一起刷新（latest/beta 会从 npm 拉真实 dist-tag）
 npm run sync-readme-install-version
 
-# 3) 发布前校验
+# 3) 编辑 CHANGELOG.md 顶部，添加本版本章节
+
+# 4) 发布前校验
 npm run typecheck
 npm run test
 npm run build
 
-# 4) 提交版本变更（含 README、CHANGELOG 等）
+# 5) 提交版本变更
 git add package.json package-lock.json README.md CHANGELOG.md scripts src
 git commit -m "2026.5.9-beta.1"
 
-# 5) 打 tag 并推送代码与 tag
+# 6) 打 tag 并推送代码与 tag
 git tag 2026.5.9-beta.1
 git push origin main
 git push origin 2026.5.9-beta.1
 
-# 6) 发布 npm（可按需指定 registry）
-npm publish
-# 或
+# 7) 发布到 npm
+#    - Beta 预发（不占用 latest dist-tag）：
+npm publish --tag beta --registry https://registry.npmjs.org
+#    - 正式版（同时占用 latest）：
 # npm publish --registry https://registry.npmjs.org
+
+# 8) 发布成功后再跑一次 sync，把 README 的 :latest / :beta 标记区刷新到 npm 最新 dist-tag，并提交
+npm run sync-readme-install-version
+git add README.md && git commit -m "docs: refresh README install commands" || true
+git push origin main || true
 ```
 <!-- /sync:infoflow-plugin-version -->
 
