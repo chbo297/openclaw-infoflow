@@ -15,6 +15,7 @@ import {
   resolveInfoflowAccount,
 } from "./accounts.js";
 import { infoflowMessageActions } from "./actions.js";
+import { createListSentMessagesTool } from "./agent-tools.js";
 import { logVerbose } from "./logging.js";
 import { parseMarkdownForLocalImages } from "./markdown-local-images.js";
 import { prepareInfoflowImageBase64, sendInfoflowImageMessage } from "./media.js";
@@ -97,10 +98,21 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
   },
   reload: { configPrefixes: ["channels.infoflow"] },
   actions: infoflowMessageActions,
+  agentTools: (params) => [
+    createListSentMessagesTool({
+      getConfig: () => params.cfg ?? ({} as OpenClawConfig),
+    }),
+  ],
   agentPrompt: {
     messageToolHints: () => [
       'Infoflow group @mentions: set atAll=true to @all members, or mentionUserIds="user1,user2" (comma-separated uuapName) to @mention specific users. Only effective for group targets (group:<id>).',
-      'Infoflow supports message recall (撤回): use action="delete" to recall the most recent message, or specify messageId to recall a specific message. Works for both private and group messages.',
+      'Infoflow message recall (撤回): use action="delete" to recall a bot-sent message.',
+      '  - To recall a specific message, pass messageId=<the bot message id>. Get the id from (a) the "Recent messages you (the bot) sent" section that may be injected into the body, (b) the "quoted reply target" block when sentByBot=true, or (c) the infoflow_list_sent_messages tool.',
+      '  - To recall the most recent message without specifying id, omit messageId (defaults to count=1).',
+      '  - For batch recall use count=<N>.',
+      '  - NEVER pass the current inbound message_id (the user-sent message you are replying to) as the delete target — that is the USER\'s message, not a bot message; the call will fail.',
+      '  - When a quoted reply target is present with sentByBot=true, that messageId is the most likely recall target.',
+      '  - For messages older than the injected recent window, or hard-to-identify ones, call infoflow_list_sent_messages first (use containsText / withinHours filters) and then pass the chosen messageId to action="delete".',
     ],
   },
   config: {

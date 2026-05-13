@@ -11,6 +11,7 @@ import type {
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { resolveInfoflowAccount } from "./accounts.js";
+import { lookupInboundContext } from "./inbound-context.js";
 import { logVerbose } from "./logging.js";
 import { prepareInfoflowImageBase64, sendInfoflowImageMessage } from "./media.js";
 import {
@@ -22,6 +23,7 @@ import {
   findSentMessage,
   querySentMessages,
   removeRecalledMessages,
+  type SentMessageRecord,
 } from "./sent-message-store.js";
 import { normalizeInfoflowTarget } from "./targets.js";
 import type { InfoflowMessageContentItem, InfoflowOutboundReply } from "./types.js";
@@ -32,6 +34,48 @@ const RECALL_FAIL_HINT = "Recall failed. Send a brief reply stating only the fai
 const RECALL_PARTIAL_HINT =
   "Some recalls failed. Send a brief reply stating only the failure reason(s).";
 
+/**
+ * Resolve the inbound replyToMessageId from the action ctx + inbound-context map.
+ * Returns the bot-sent messageId the user is quote-replying to (if any), so we
+ * can recover when the LLM accidentally passes the inbound user-message id as
+ * the delete target.
+ */
+function resolveInboundReplyToMessageId(params: {
+  accountId: string;
+  target: string;
+  currentMessageId: string | number | undefined;
+}): string | undefined {
+  const currentMessageId =
+    params.currentMessageId != null ? String(params.currentMessageId) : undefined;
+  if (!currentMessageId) return undefined;
+  const ctx = lookupInboundContext(currentMessageId);
+  if (!ctx) return undefined;
+  // Scope match: same account + target (avoid using a stale context from another chat).
+  if (ctx.accountId !== params.accountId) return undefined;
+  if (ctx.target !== params.target) return undefined;
+  return ctx.replyToMessageId;
+}
+
+/** Format up to N recent sent messages for an error-path hint to the LLM. */
+function formatRecentCandidatesForError(records: SentMessageRecord[], limit = 5): string {
+  if (!records || !Array.isArray(records) || records.length === 0) return "";
+  const lines = records.slice(0, limit).map((r) => {
+    const previewText = r.digest || "(no preview)";
+    return `messageId=${r.messageid} preview="${previewText}"`;
+  });
+  return lines.join("; ");
+}
+
+/** Safe candidate lookup that never throws (errors → empty string). */
+function safeRecentCandidates(accountId: string, target: string): string {
+  try {
+    const records = querySentMessages(accountId, { target, count: 5 });
+    return formatRecentCandidatesForError(records);
+  } catch {
+    return "";
+  }
+}
+
 export const infoflowMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: () => ({
     actions: ["send", "delete"] satisfies readonly ChannelMessageActionName[],
@@ -39,7 +83,7 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
 
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
 
-  handleAction: async ({ action, params, cfg, accountId }) => {
+  handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     // -----------------------------------------------------------------------
     // delete (群消息撤回) — Mode A: by messageId, Mode B: by count
     // -----------------------------------------------------------------------
@@ -70,29 +114,60 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
 
         // Mode A: single message recall by messageId
         if (messageId) {
+          // Resolve msgseqid (group recall requires it). If the LLM-passed messageId
+          // is unknown to the store, fall back to the inbound replyToMessageId — the
+          // common failure mode is the LLM passing the inbound user-message id as
+          // the delete target instead of the bot-message id it's quote-replying to.
+          let effectiveMessageId = messageId;
           let msgseqid = readStringParam(params, "msgseqid") ?? "";
-          if (!msgseqid) {
-            const stored = findSentMessage(account.accountId, messageId);
-            if (stored?.msgseqid) {
-              msgseqid = stored.msgseqid;
+          let stored = findSentMessage(account.accountId, effectiveMessageId);
+
+          if (!stored && !msgseqid) {
+            const fallbackId = resolveInboundReplyToMessageId({
+              accountId: account.accountId,
+              target: `group:${groupId}`,
+              currentMessageId: toolContext?.currentMessageId,
+            });
+            if (fallbackId && fallbackId !== effectiveMessageId) {
+              const fallbackStored = findSentMessage(account.accountId, fallbackId);
+              if (fallbackStored) {
+                logVerbose(
+                  `[infoflow:delete] LLM passed unknown messageId=${effectiveMessageId}, falling back to replyToMessageId=${fallbackId}`,
+                );
+                effectiveMessageId = fallbackId;
+                stored = fallbackStored;
+              }
             }
           }
+
+          if (!msgseqid && stored?.msgseqid) {
+            msgseqid = stored.msgseqid;
+          }
+
           if (!msgseqid) {
+            const candidates = safeRecentCandidates(account.accountId, `group:${groupId}`);
+            logVerbose(
+              `[infoflow:delete] unknown messageId=${effectiveMessageId}, no fallback available, returning candidates to LLM`,
+            );
             throw new Error(
-              "delete requires msgseqid (not found in store; provide it explicitly or send messages first).",
+              `delete: messageId=${effectiveMessageId} is not a known bot-sent message in this chat (msgseqid not found in store). ` +
+                `It looks like you may have passed the inbound (user) message id instead of the bot's. ` +
+                (candidates
+                  ? `Recent bot-sent messages here: ${candidates}. Pick the right messageId and retry.`
+                  : `No recent bot-sent messages on file for this chat. Aborting to avoid wrong recall.`),
             );
           }
 
           const result = await recallInfoflowGroupMessage({
             account,
             groupId,
-            messageid: messageId,
+            messageid: effectiveMessageId,
             msgseqid,
           });
 
           if (result.ok) {
             try {
-              removeRecalledMessages(account.accountId, [messageId]);
+              removeRecalledMessages(account.accountId, [effectiveMessageId]);
             } catch {
               // ignore cleanup errors
             }
@@ -102,6 +177,7 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
             ok: result.ok,
             channel: "infoflow",
             to,
+            messageId: effectiveMessageId,
             ...(result.error ? { error: result.error } : {}),
             _hint: result.ok ? RECALL_OK_HINT : RECALL_FAIL_HINT,
           });
@@ -198,15 +274,42 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
 
         // Mode A: single message recall by messageId (msgkey)
         if (messageId) {
+          // Attempt the inbound-context fallback when the LLM-passed messageId is
+          // unknown to the store. If we can swap it for a verified bot-message id
+          // from the inbound replyTo, do so. Otherwise PRESERVE the original
+          // permissive behavior (pass the LLM id straight to the API and let
+          // Infoflow's backend judge) — the store may legitimately not contain
+          // every recallable DM message (e.g., after the 7-day retention sweep
+          // or for messages sent before this plugin started recording).
+          let effectiveMessageId = messageId;
+          const stored = findSentMessage(account.accountId, effectiveMessageId);
+
+          if (!stored) {
+            const fallbackId = resolveInboundReplyToMessageId({
+              accountId: account.accountId,
+              target,
+              currentMessageId: toolContext?.currentMessageId,
+            });
+            if (fallbackId && fallbackId !== effectiveMessageId) {
+              const fallbackStored = findSentMessage(account.accountId, fallbackId);
+              if (fallbackStored) {
+                logVerbose(
+                  `[infoflow:delete] LLM passed unknown messageId=${effectiveMessageId}, falling back to replyToMessageId=${fallbackId}`,
+                );
+                effectiveMessageId = fallbackId;
+              }
+            }
+          }
+
           const result = await recallInfoflowPrivateMessage({
             account,
-            msgkey: messageId,
+            msgkey: effectiveMessageId,
             appAgentId,
           });
 
           if (result.ok) {
             try {
-              removeRecalledMessages(account.accountId, [messageId]);
+              removeRecalledMessages(account.accountId, [effectiveMessageId]);
             } catch {
               // ignore cleanup errors
             }
@@ -216,6 +319,7 @@ export const infoflowMessageActions: ChannelMessageActionAdapter = {
             ok: result.ok,
             channel: "infoflow",
             to,
+            messageId: effectiveMessageId,
             ...(result.error ? { error: result.error } : {}),
             _hint: result.ok ? RECALL_OK_HINT : RECALL_FAIL_HINT,
           });

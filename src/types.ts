@@ -212,6 +212,12 @@ export type InfoflowMessageEvent = {
   replyContext?: string[];
   /** Whether the message is a reply (引用回复) to one of the bot's own messages */
   isReplyToBot?: boolean;
+  /** Structured replyData targets: each entry has messageid + preview + isBotMessage. */
+  replyTargets?: ReadonlyArray<{
+    messageid: string;
+    preview: string;
+    isBotMessage: boolean;
+  }>;
   /** Image download URLs extracted from IMAGE body items (group) or PicUrl (private) */
   imageUrls?: string[];
 };

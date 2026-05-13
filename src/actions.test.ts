@@ -31,9 +31,11 @@ vi.mock("./accounts.js", () => ({
 
 const mockSendInfoflowMessage = vi.hoisted(() => vi.fn());
 const mockRecallInfoflowGroupMessage = vi.hoisted(() => vi.fn());
+const mockRecallInfoflowPrivateMessage = vi.hoisted(() => vi.fn());
 vi.mock("./send.js", () => ({
   sendInfoflowMessage: mockSendInfoflowMessage,
   recallInfoflowGroupMessage: mockRecallInfoflowGroupMessage,
+  recallInfoflowPrivateMessage: mockRecallInfoflowPrivateMessage,
 }));
 
 const mockPrepareInfoflowImageBase64 = vi.hoisted(() => vi.fn());
@@ -53,6 +55,7 @@ vi.mock("./sent-message-store.js", () => ({
 }));
 
 import { infoflowMessageActions } from "./actions.js";
+import { registerInboundContext, _resetInboundContext } from "./inbound-context.js";
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -64,6 +67,8 @@ describe("infoflowMessageActions", () => {
     mockSendInfoflowMessage.mockResolvedValue({ ok: true, messageId: "msg-1" });
     mockRecallInfoflowGroupMessage.mockReset();
     mockRecallInfoflowGroupMessage.mockResolvedValue({ ok: true });
+    mockRecallInfoflowPrivateMessage.mockReset();
+    mockRecallInfoflowPrivateMessage.mockResolvedValue({ ok: true });
     mockPrepareInfoflowImageBase64.mockReset();
     mockPrepareInfoflowImageBase64.mockResolvedValue({ isImage: false }); // default: non-image
     mockSendInfoflowImageMessage.mockReset();
@@ -499,8 +504,9 @@ describe("infoflowMessageActions", () => {
     );
   });
 
-  it("throws when msgseqid not found in store or params", async () => {
+  it("throws with candidate hint when messageId not found in store and no fallback available", async () => {
     mockFindSentMessage.mockReturnValue(undefined);
+    mockQuerySentMessages.mockReturnValue([]);
 
     await expect(
       infoflowMessageActions.handleAction!({
@@ -509,7 +515,7 @@ describe("infoflowMessageActions", () => {
         cfg: {} as never,
         params: { to: "group:123", messageId: "456" },
       }),
-    ).rejects.toThrow("delete requires msgseqid");
+    ).rejects.toThrow(/not a known bot-sent message/);
   });
 
   it("throws when delete target is private and appAgentId is not configured", async () => {
@@ -687,5 +693,188 @@ describe("infoflowMessageActions", () => {
         msgseqid: "789",
       }),
     );
+  });
+});
+
+describe("delete handler — replyToMessageId fallback", () => {
+  beforeEach(() => {
+    _resetInboundContext();
+    mockFindSentMessage.mockReset();
+    mockQuerySentMessages.mockReset();
+    mockRecallInfoflowGroupMessage.mockReset();
+    mockRecallInfoflowGroupMessage.mockResolvedValue({ ok: true });
+    mockRemoveRecalledMessages.mockReset();
+  });
+
+  it("group: falls back to replyToMessageId when LLM-passed messageId is unknown", async () => {
+    // Register inbound context: user message id=USER123 quote-replied to bot message BOT999
+    registerInboundContext({
+      accountId: "default",
+      target: "group:42",
+      inboundMessageId: "USER123",
+      replyToMessageId: "BOT999",
+      replyTargets: [{ messageid: "BOT999", preview: "joke", isBotMessage: true }],
+      registeredAt: Date.now(),
+    });
+
+    // findSentMessage: USER123 → undefined; BOT999 → found with msgseqid
+    mockFindSentMessage.mockImplementation((_acct: string, id: string) =>
+      id === "BOT999"
+        ? {
+            target: "group:42",
+            from: "agent:1",
+            messageid: "BOT999",
+            msgseqid: "SEQ-99",
+            digest: "joke",
+            sentAt: Date.now(),
+          }
+        : undefined,
+    );
+
+    const result = await infoflowMessageActions.handleAction!({
+      channel: "infoflow",
+      action: "delete" as never,
+      cfg: {} as never,
+      params: { to: "group:42", messageId: "USER123" }, // LLM passed the WRONG id
+      toolContext: { currentMessageId: "USER123" } as never,
+    });
+
+    expect(mockRecallInfoflowGroupMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ groupId: 42, messageid: "BOT999", msgseqid: "SEQ-99" }),
+    );
+    expect((result as { details: { messageId: string } }).details.messageId).toBe("BOT999");
+  });
+
+  it("group: throws with candidate list when LLM id unknown and no replyToMessageId available", async () => {
+    mockFindSentMessage.mockReturnValue(undefined);
+    mockQuerySentMessages.mockReturnValue([
+      {
+        target: "group:42",
+        from: "a",
+        messageid: "BOT-A",
+        msgseqid: "S-A",
+        digest: "笑话: ...",
+        sentAt: Date.now(),
+      },
+    ]);
+
+    await expect(
+      infoflowMessageActions.handleAction!({
+        channel: "infoflow",
+        action: "delete" as never,
+        cfg: {} as never,
+        params: { to: "group:42", messageId: "WRONG" },
+        toolContext: { currentMessageId: "USER999" } as never,
+      }),
+    ).rejects.toThrow(/Recent bot-sent messages here.*BOT-A/);
+  });
+
+  it("group: does not fall back across account/target mismatch", async () => {
+    // Context registered for a DIFFERENT target
+    registerInboundContext({
+      accountId: "default",
+      target: "group:OTHER",
+      inboundMessageId: "USER123",
+      replyToMessageId: "BOT999",
+      registeredAt: Date.now(),
+    });
+    mockFindSentMessage.mockReturnValue(undefined);
+    mockQuerySentMessages.mockReturnValue([]);
+
+    await expect(
+      infoflowMessageActions.handleAction!({
+        channel: "infoflow",
+        action: "delete" as never,
+        cfg: {} as never,
+        params: { to: "group:42", messageId: "USER123" },
+        toolContext: { currentMessageId: "USER123" } as never,
+      }),
+    ).rejects.toThrow(/not a known bot-sent message/);
+    expect(mockRecallInfoflowGroupMessage).not.toHaveBeenCalled();
+  });
+
+  it("private: falls back to replyToMessageId for DM recall", async () => {
+    // Mock account with appAgentId configured (private recall needs it)
+    const accountsModule = await import("./accounts.js");
+    (accountsModule.resolveInfoflowAccount as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      config: {
+        apiHost: "https://api.infoflow.test",
+        appKey: "key",
+        appSecret: "secret",
+        checkToken: "tok",
+        encodingAESKey: "aes",
+        appAgentId: 12345,
+      },
+    });
+
+    registerInboundContext({
+      accountId: "default",
+      target: "alice",
+      inboundMessageId: "U1",
+      replyToMessageId: "BOT-MSG",
+      registeredAt: Date.now(),
+    });
+    mockFindSentMessage.mockImplementation((_a: string, id: string) =>
+      id === "BOT-MSG"
+        ? {
+            target: "alice",
+            from: "agent:1",
+            messageid: "BOT-MSG",
+            msgseqid: "",
+            digest: "hi",
+            sentAt: Date.now(),
+          }
+        : undefined,
+    );
+
+    const result = await infoflowMessageActions.handleAction!({
+      channel: "infoflow",
+      action: "delete" as never,
+      cfg: {} as never,
+      params: { to: "alice", messageId: "WRONG-LLM-ID" },
+      toolContext: { currentMessageId: "U1" } as never,
+    });
+
+    expect(mockRecallInfoflowPrivateMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ msgkey: "BOT-MSG", appAgentId: 12345 }),
+    );
+    expect((result as { details: { messageId: string } }).details.messageId).toBe("BOT-MSG");
+  });
+
+  it("private (regression): unknown messageId + NO fallback → passes through to API (does NOT throw)", async () => {
+    // This is the regression check: original DM behavior was permissive.
+    // Even when the store has no record of the messageId, we attempt the recall
+    // and let the Infoflow backend decide. We MUST NOT block on store-miss.
+    const accountsModule = await import("./accounts.js");
+    (accountsModule.resolveInfoflowAccount as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      config: {
+        apiHost: "https://api.infoflow.test",
+        appKey: "key",
+        appSecret: "secret",
+        checkToken: "tok",
+        encodingAESKey: "aes",
+        appAgentId: 12345,
+      },
+    });
+    mockFindSentMessage.mockReturnValue(undefined);
+    // No inbound context registered → no fallback available.
+
+    const result = await infoflowMessageActions.handleAction!({
+      channel: "infoflow",
+      action: "delete" as never,
+      cfg: {} as never,
+      params: { to: "alice", messageId: "SOME-LEGITIMATE-OLD-ID" },
+    });
+
+    expect(mockRecallInfoflowPrivateMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ msgkey: "SOME-LEGITIMATE-OLD-ID" }),
+    );
+    expect((result as { details: { ok: boolean } }).details.ok).toBe(true);
   });
 });

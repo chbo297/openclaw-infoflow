@@ -10,10 +10,11 @@ import {
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
 import { resolveInfoflowAccount } from "./accounts.js";
+import { registerInboundContext } from "./inbound-context.js";
 import { getInfoflowBotLog, formatInfoflowError, logVerbose } from "./logging.js";
 import { createInfoflowReplyDispatcher } from "./reply-dispatcher.js";
 import { getInfoflowRuntime } from "./runtime.js";
-import { findSentMessage } from "./sent-message-store.js";
+import { findSentMessage, querySentMessages } from "./sent-message-store.js";
 import type {
   InfoflowChatType,
   InfoflowMessageEvent,
@@ -260,25 +261,133 @@ function resolveFollowUpOtherMentioned(params: {
 // Reply-to-bot detection (引用回复机器人消息)
 // ---------------------------------------------------------------------------
 
+/** Structured info for each replyData target on an inbound message. */
+export type InfoflowReplyTarget = {
+  /** Quoted message's id (string to preserve large-int precision). */
+  messageid: string;
+  /** Quoted message body content. */
+  preview: string;
+  /** True iff the quoted messageid is found in sent-messages.db (a bot-sent message). */
+  isBotMessage: boolean;
+};
+
 /**
- * Check if the message is a reply (引用回复) to one of the bot's own messages.
- * Looks up replyData body items' messageid against the sent-message-store.
+ * Resolve all replyData targets from inbound body items, including each target's
+ * messageid + body preview + isBotMessage (via sent-message-store lookup).
+ *
+ * This is the structured form behind `checkReplyToBot`: callers who only want a
+ * boolean can compute it as `targets.some((t) => t.isBotMessage)`. Returning the
+ * full list lets us surface the messageid to the LLM and resolve the right
+ * recall target — the previous bool-only API was the root cause of the LLM
+ * passing the inbound (user) messageId to action=delete.
  */
-function checkReplyToBot(bodyItems: InfoflowBodyItem[], accountId: string): boolean {
+function resolveReplyTargets(
+  bodyItems: InfoflowBodyItem[],
+  accountId: string,
+): InfoflowReplyTarget[] {
+  const out: InfoflowReplyTarget[] = [];
   for (const item of bodyItems) {
     if (item.type !== "replyData") continue;
     const msgId = item.messageid;
     if (msgId == null) continue;
     const msgIdStr = String(msgId);
     if (!msgIdStr) continue;
+    let isBotMessage = false;
     try {
-      const found = findSentMessage(accountId, msgIdStr);
-      if (found) return true;
+      isBotMessage = Boolean(findSentMessage(accountId, msgIdStr));
     } catch {
       // DB lookup failure should not block message processing
     }
+    out.push({
+      messageid: msgIdStr,
+      preview: (item.content ?? "").trim(),
+      isBotMessage,
+    });
   }
-  return false;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Sent-message context injection (push) — solves both the "AI uses inbound id
+// as delete target" bug and the "DM-triggered cross-context send is invisible
+// in the target group" bug. sent-messages.db tracks all bot-sent messages
+// keyed by target, so a single push surfaces messages sent from any session.
+// ---------------------------------------------------------------------------
+
+/** Detect inbound text that semantically asks the bot to recall/delete messages. */
+const RECALL_INTENT_REGEX =
+  /(撤回|收回|删[掉了除]|取消|清除|recall|unsend|undo\s*send|delete\s+(?:that|those|the\s+(?:last|previous(?:\s+\d+)?)))/i;
+
+function looksLikeRecallIntent(text: string): boolean {
+  if (!text) return false;
+  return RECALL_INTENT_REGEX.test(text);
+}
+
+const RECENT_BOT_AMBIENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const RECENT_BOT_AMBIENT_COUNT = 5;
+const RECENT_BOT_DETAIL_COUNT = 10;
+
+/**
+ * Build a system-style section listing the bot's recent messages to this chat.
+ * Two modes — ambient (compact, awareness only) and detail (longer, with
+ * explicit instruction for recall). Returns undefined when there's nothing
+ * recent to report so unrelated chats stay token-cheap.
+ */
+function buildBotRecentMessagesSection(params: {
+  accountId: string;
+  target: string;
+  inboundLooksLikeRecall: boolean;
+  isReplyToBot: boolean;
+}): { text: string; mode: "ambient" | "detail"; count: number } | undefined {
+  const detail = params.inboundLooksLikeRecall || params.isReplyToBot;
+  const count = detail ? RECENT_BOT_DETAIL_COUNT : RECENT_BOT_AMBIENT_COUNT;
+  let records;
+  try {
+    records = querySentMessages(params.accountId, { target: params.target, count });
+  } catch {
+    return undefined;
+  }
+  if (records.length === 0) return undefined;
+
+  const cutoff = Date.now() - RECENT_BOT_AMBIENT_WINDOW_MS;
+  const recent = records.filter((r) => r.sentAt >= cutoff);
+  if (recent.length === 0) return undefined;
+
+  const header = detail
+    ? "[System: Recent messages you (the bot) sent to this chat (newest first). Use these messageIds when recalling/deleting your own messages. NEVER pass the current inbound message_id as the delete target — that is the USER's message, not a bot message.]"
+    : "[System: Your recent messages to this chat (for awareness — these may have been sent from another session/context):]";
+
+  const lines = recent.map((r, i) => {
+    const ageMin = Math.max(0, Math.round((Date.now() - r.sentAt) / 60000));
+    const previewText = r.digest || "(no preview)";
+    return `  ${i + 1}. messageId=${r.messageid}  sent=${ageMin}m ago  preview="${previewText}"`;
+  });
+  return {
+    text: [header, ...lines].join("\n"),
+    mode: detail ? "detail" : "ambient",
+    count: recent.length,
+  };
+}
+
+/**
+ * Build a section describing each quoted-reply target on the inbound message,
+ * with messageid + isBotMessage. Only emitted when there's at least one target.
+ * This is the missing piece for the original bug — the LLM needs to know which
+ * id belongs to the quoted bot message, distinct from the inbound message's id.
+ */
+function formatQuotedReplyTargetsSection(
+  targets: ReadonlyArray<InfoflowReplyTarget>,
+): string | undefined {
+  if (!targets.length) return undefined;
+  const lines = targets.map((t, i) => {
+    const previewText = t.preview ? t.preview.slice(0, 200) : "(no preview)";
+    return `  ${i + 1}. messageId=${t.messageid}  sentByBot=${t.isBotMessage}  preview="${previewText}"`;
+  });
+  return [
+    "[System: This message is a quoted reply to:",
+    ...lines,
+    "If the user is asking to act on (recall/edit/quote) a referenced message and sentByBot=true, use that messageId as the action target.]",
+  ].join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -745,8 +854,14 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
   // Extract sender name from header or fallback to fromuser
   const senderName = String(header?.username ?? header?.nickname ?? msgData.username ?? fromuser);
 
-  // Detect reply-to-bot: check if any replyData item quotes a bot-sent message
-  const isReplyToBot = replyContext ? checkReplyToBot(bodyItems, accountId) : false;
+  // Resolve all replyData targets (id + preview + isBotMessage). We need the
+  // structured form (not just a boolean) so we can surface the bot-message
+  // messageId to the LLM for correct recall.
+  const replyTargets =
+    Array.isArray(bodyItems) && bodyItems.length > 0
+      ? resolveReplyTargets(bodyItems, accountId)
+      : [];
+  const isReplyToBot = replyTargets.some((t) => t.isBotMessage);
 
   // Delegate to the common message handler (group chat)
   await handleInfoflowMessage({
@@ -767,6 +882,7 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
         mentionIds.userIds.length > 0 || mentionIds.agentIds.length > 0 ? mentionIds : undefined,
       replyContext,
       isReplyToBot: isReplyToBot || undefined,
+      replyTargets: replyTargets.length > 0 ? replyTargets : undefined,
       imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
     },
     accountId,
@@ -974,6 +1090,61 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     logVerbose(
       `[infoflow] group: BodyForAgent set for LLM (${bodyForAgent.length} chars, includes @/robotid)`,
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Inject sent-message context into the LLM body. Two sections:
+  //   1. Quoted-reply targets (when this inbound is a 引用回复): exposes the
+  //      bot-message messageId so the LLM doesn't mistake the inbound id for
+  //      the recall target.
+  //   2. Recent bot-sent messages (always, when records exist within 24h):
+  //      gives the LLM both ambient awareness (for cross-context-sent messages
+  //      that aren't in this session's history) and a candidate list for
+  //      semantic recall ("撤回刚才那条笑话").
+  // ---------------------------------------------------------------------------
+  const ctxTarget = isGroup && groupId !== undefined ? `group:${groupId}` : fromuser;
+  {
+    const sections: string[] = [];
+
+    const quotedSection = formatQuotedReplyTargetsSection(event.replyTargets ?? []);
+    if (quotedSection) sections.push(quotedSection);
+
+    const recallTextSource =
+      `${bodyForAgent ?? ""}\n${event.replyContext?.join(" ") ?? ""}`.trim();
+    const recentSection = buildBotRecentMessagesSection({
+      accountId,
+      target: ctxTarget,
+      inboundLooksLikeRecall: looksLikeRecallIntent(recallTextSource),
+      isReplyToBot: event.isReplyToBot === true,
+    });
+    if (recentSection) {
+      sections.push(recentSection.text);
+      logVerbose(
+        `[infoflow:ctx] injected recent-bot-messages section (mode=${recentSection.mode}, count=${recentSection.count}, target=${ctxTarget})`,
+      );
+    }
+
+    if (sections.length > 0) {
+      const existing = String((ctxPayload as Record<string, unknown>).Body ?? "");
+      (ctxPayload as Record<string, unknown>).Body =
+        `${existing}\n\n${sections.join("\n\n")}`.trim();
+    }
+  }
+
+  // Register inbound context so the delete action handler can fall back to the
+  // bot-message id the inbound is quote-replying to (when present) — only used
+  // when the LLM otherwise passes an unknown id. We intentionally only pick a
+  // bot-sent reply target: falling back to a non-bot reply id would never help
+  // (it can't be in sent-messages.db) and only adds noise.
+  if (event.messageId) {
+    registerInboundContext({
+      accountId,
+      target: ctxTarget,
+      inboundMessageId: event.messageId,
+      replyToMessageId: event.replyTargets?.find((t) => t.isBotMessage)?.messageid,
+      replyTargets: event.replyTargets,
+      registeredAt: Date.now(),
+    });
   }
 
   // Record session using recordInboundSession for proper session tracking
@@ -1264,8 +1435,22 @@ export const _extractMentionIds = extractMentionIds;
 /** @internal — Check if message matches any watchRegex pattern (dotAll). Only exported for tests. */
 export const _checkWatchRegex = checkWatchRegex;
 
-/** @internal — Check if message is a reply to one of the bot's own messages. Only exported for tests. */
-export const _checkReplyToBot = checkReplyToBot;
+/** @internal — Resolve structured replyData targets (id + preview + isBotMessage). Only exported for tests. */
+export const _resolveReplyTargets = resolveReplyTargets;
+
+/** @internal — Back-compat boolean form used by older tests; prefer _resolveReplyTargets. */
+export function _checkReplyToBot(bodyItems: InfoflowBodyItem[], accountId: string): boolean {
+  return resolveReplyTargets(bodyItems, accountId).some((t) => t.isBotMessage);
+}
 
 /** @internal — Group output hygiene fragment appended to GroupSystemPrompt. Only exported for tests. */
 export const _buildGroupOutputHygienePrompt = buildGroupOutputHygienePrompt;
+
+/** @internal — Recall intent regex. Only exported for tests. */
+export const _looksLikeRecallIntent = looksLikeRecallIntent;
+
+/** @internal — Sent-messages section builder. Only exported for tests. */
+export const _buildBotRecentMessagesSection = buildBotRecentMessagesSection;
+
+/** @internal — Quoted-reply targets section builder. Only exported for tests. */
+export const _formatQuotedReplyTargetsSection = formatQuotedReplyTargetsSection;

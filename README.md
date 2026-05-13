@@ -46,7 +46,7 @@ BAIDU_NPM_REGISTRY=http://registry.npm.baidu-int.com bash scripts/deploy.sh
 <!-- sync:infoflow-plugin-version -->
 ```bash
 # 正式版（latest）
-npx -y @chbo297/infoflow-openclaw-tools update --version 2026.5.8 --registry https://registry.npmjs.org
+npx -y @chbo297/infoflow-openclaw-tools update --version 2026.5.9-beta.1 --registry https://registry.npmjs.org
 ```
 <!-- /sync:infoflow-plugin-version -->
 
@@ -60,7 +60,7 @@ npx -y @chbo297/infoflow-openclaw-tools@beta update --version 2026.5.8-beta.1 --
 <!-- sync:infoflow-plugin-version -->
 ```bash
 # 正式版
-openclaw plugins install @chbo297/infoflow@2026.5.8
+openclaw plugins install @chbo297/infoflow@2026.5.9-beta.1
 ```
 <!-- /sync:infoflow-plugin-version -->
 
@@ -82,7 +82,7 @@ openclaw plugins inspect infoflow
 
 <!-- sync:infoflow-plugin-version -->
 ```bash
-npx -y @chbo297/infoflow-openclaw-tools update --version 2026.5.8 --registry https://registry.npmjs.org
+npx -y @chbo297/infoflow-openclaw-tools update --version 2026.5.9-beta.1 --registry https://registry.npmjs.org
 ```
 <!-- /sync:infoflow-plugin-version -->
 
@@ -112,7 +112,7 @@ npx -y @chbo297/infoflow-openclaw-tools update --version 2026.5.8 --registry htt
 <!-- sync:infoflow-plugin-version -->
 ```bash
 # 1) 修改版本号（会同步 package-lock.json）
-npm version 2026.5.8 --no-git-tag-version
+npm version 2026.5.9-beta.1 --no-git-tag-version
 
 # 2) 同步 README 中标记块内的推荐安装命令与下文中的 tag / commit 示例版本号
 npm run sync-readme-install-version
@@ -124,12 +124,12 @@ npm run build
 
 # 4) 提交版本变更（含 README、CHANGELOG 等）
 git add package.json package-lock.json README.md CHANGELOG.md scripts src
-git commit -m "2026.5.8"
+git commit -m "2026.5.9-beta.1"
 
 # 5) 打 tag 并推送代码与 tag
-git tag 2026.5.8
+git tag 2026.5.9-beta.1
 git push origin main
-git push origin 2026.5.8
+git push origin 2026.5.9-beta.1
 
 # 6) 发布 npm（可按需指定 registry）
 npm publish
