@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026.5.7
+
+### 优化
+
+#### watchMentions / watchRegex 群系统提示（GroupSystemPrompt）
+
+- **开场文案**：在有人 @ 了 `watchMentions` 中的用户时，明确先结合线程与引用上下文、知识与工具判断能否提供直接答案、可执行下一步或有用线索；强调单次最终回复，避免在群内试探性多轮刷屏。
+- **共享拒答规则变体**：为 `watchMentions` 与 `watchRegex` 路径使用 `watchAssistant` 变体，从「何时不回复」中移除「消息是发给另一个人的，而不是发给你」一条，避免与「作为被 @ 用户的助手代为判断是否帮助」语义冲突；`followUp` 与 `proactive` 仍保留原完整规则。
+
+---
+
 ## 2026.3.17
 
 ### 修复与优化

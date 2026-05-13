@@ -285,9 +285,13 @@ function checkReplyToBot(bodyItems: InfoflowBodyItem[], accountId: string): bool
 // Shared reply judgment rules (reused across prompt builders)
 // ---------------------------------------------------------------------------
 
+/** Variant for shared judgment rules: watch paths omit the "directed at another person" bullet (conflicts with assistant-for-@user framing). */
+type ReplyJudgmentRulesVariant = "default" | "watchAssistant";
+
 /** Shared judgment rules and reply format requirements for all conditional-reply prompts */
-function buildReplyJudgmentRules(): string {
-  return [
+function buildReplyJudgmentRules(options?: { variant?: ReplyJudgmentRulesVariant }): string {
+  const variant = options?.variant ?? "default";
+  const lines: string[] = [
     "# Rules for Group Message Response",
     "",
     "## When to Reply",
@@ -302,7 +306,11 @@ function buildReplyJudgmentRules(): string {
     "Do NOT reply if ANY of the following is true:",
     "- The message is casual chatter, banter, emoji-only, or has no actionable question/request",
     "- The user explicitly indicates they don't want your response",
-    "- The message is directed at another person, not at you",
+  ];
+  if (variant === "default") {
+    lines.push("- The message is directed at another person, not at you");
+  }
+  lines.push(
     "- You lack the context or knowledge to give a useful answer (e.g., private/internal info you don't have access to)",
     "- The message intent is ambiguous and a wrong guess would be more disruptive than silence",
     "",
@@ -314,7 +322,8 @@ function buildReplyJudgmentRules(): string {
     "## Guiding Principle",
     "",
     "When in doubt, prefer silence (`NO_REPLY`). A missing reply is far less disruptive than an irrelevant or incorrect one in a group chat.",
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 /**
@@ -323,10 +332,11 @@ function buildReplyJudgmentRules(): string {
  */
 function buildWatchMentionPrompt(mentionedId: string): string {
   return [
-    `Someone in the group @mentioned ${mentionedId}. As ${mentionedId}'s assistant, you observed this message.`,
-    "Decide whether you can answer on their behalf or provide help.",
+    `Someone in the group @mentioned ${mentionedId}. You are ${mentionedId}'s assistant and you see this message.`,
+    "Before you write your reply, use the visible thread context, quoted/reply context if any, and your knowledge and tools to decide whether you can add value (a direct answer, a concrete next step, or a useful pointer). Prefer making a genuine attempt to help when context makes it reasonable; do not send exploratory or partial messages to the group—produce a single final message.",
+    "If you can provide worthwhile help or leads, reply with that information clearly and concisely. If, after that effort, you still have nothing useful to add, output exactly NO_REPLY and nothing else.",
     "",
-    buildReplyJudgmentRules(),
+    buildReplyJudgmentRules({ variant: "watchAssistant" }),
     "",
     "# Examples",
     "",
@@ -356,7 +366,7 @@ function buildWatchRegexPrompt(patterns: string[]): string {
     `The message content matched one of the configured watch patterns ${label}.`,
     "As the group assistant, you observed this message. Decide whether you can provide help or a valuable reply.",
     "",
-    buildReplyJudgmentRules(),
+    buildReplyJudgmentRules({ variant: "watchAssistant" }),
   ].join("\n");
 }
 
