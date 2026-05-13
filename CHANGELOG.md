@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026.5.9-beta.2
+
+### 修复
+
+#### 激进守卫：自动纠正 LLM 将入站 messageId 当作撤回目标的错误
+
+- **现象**：即使有 `NEVER 用当前入站 message_id 作为 delete 目标` 等强制约束，LLM 仍可能将 `messageId` 设为 `toolContext.currentMessageId`（入站消息 ID），导致 store 查不到而报错需要 retry。
+- **改进**：新增激进守卫机制，检测 `messageId === toolContext.currentMessageId` 场景，基于优先级自动纠正：
+  - **优先级 1**：使用 `replyToMessageId`（入站消息引用的目标，即 bot 消息）
+  - **优先级 2**：检测"撤回上一条/最后一条"等意图时，返回 `undefined` 触发 count=1 撤回模式
+  - **优先级 3**：保留原值，依赖已有 fallback 链
+- **不破坏**：保留原有的 fallback 逻辑，向后兼容。
+
+### 改动
+
+#### 新增 src/recall-intent.ts
+
+- 撤回意图检测的共享模块，供 bot.ts 和 actions.ts 使用
+- `looksLikeRecallIntent()`：匹配撤回/删除动词（撤回、收回、删除、recall、delete 等）
+- `looksLikeRecallLatest()`：需要同时匹配动词+时间限定词（上一条、最后一条、last、previous 等）
+
+#### src/bot.ts
+
+- 调用 `registerInboundContext()` 时新增 `inboundBody` 参数，用于守卫检测"撤回上一条"意图
+
+#### src/actions.ts
+
+- 新增 `applyAggressiveGuardForInboundMessageId()` 函数，实现三级优先级纠正
+- 群消息和私聊消息的 delete 分支均应用守卫
+
+#### src/inbound-context.ts
+
+- `InboundContextRecord` 类型新增 `inboundBody?: string` 字段
+
+---
+
 ## 2026.5.9-beta.1
 
 ### 修复
